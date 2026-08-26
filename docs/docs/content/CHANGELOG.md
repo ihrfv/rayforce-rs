@@ -7,6 +7,23 @@ All notable changes to `rayforce` are documented here. This project adheres to
 
 ### Added
 
+- **Q subscriptions.** A `QConnection` can now be handed to the event loop with
+  [`attach`](documentation/ipc.md), turning it into a `Subscription` that
+  receives frames the peer pushes unsolicited — a tickerplant or a dict-form
+  publisher. The plain client could not do this: it is blocking
+  request/response, so a pushed frame would be read as the answer to the next
+  call.
+
+  New `Poll` (the runtime's event loop), `Subscription`
+  (`send` / `execute` / `is_alive`), and `env::bind_vary` / `env::bind_unary`
+  for binding a Rust handler under the name a publisher calls. A handler is a
+  type implementing `env::VaryFn` / `env::UnaryFn`; the generated trampoline
+  borrows the arguments and catches panics, so the whole surface is safe.
+
+- **`Value::attrs`** — the attribute byte. Rarely needed, but it is the only
+  way to tell a keyed table (a 2-element list carrying `RAY_ATTR_DICT`) from a
+  plain list, which no type code distinguishes.
+
 - **CI runs the suite against a debug-flavour engine.** Set
   `RAYFORCE_CORE_DEBUG=1` and `rayforce-sys` builds `librayforce.a` with
   `-DDEBUG`, which compiles in the core's invariant checks and its stale
@@ -46,13 +63,21 @@ All notable changes to `rayforce` are documented here. This project adheres to
   than starting a second runtime. Migration is mechanical: delete
   `let _rt = Runtime::new()?;`, wrap the body, end it with `Ok(())`.
 
+- **The vendored sources move to core v2.5.15 and rayforce-q 2.1.0.**
+  `rayforce-sys` now compiles `rayforce-q`'s `q_server.c` alongside `q.c`, and
+  2.1.0 is a floor rather than a preference — the `q_conn_*` API does not exist
+  in 2.0.0. It brings the 2.0.1/2.0.2 decode fixes with it: q datetime (`KZ`)
+  converted rather than reinterpreted, the `RAY_ATTR_HAS_NULLS` gate set on
+  decoded vectors, and width-aware reads of narrow `SYM` ids.
+
 - **Nothing engine-backed leaves a scope.** `Runtime::scope` requires `Send` of
-  its return type and of the closure, and `Value`, `Table`, `Fn`, `TcpClient`
-  and `QConnection` are all `!Send` — so returning one, or assigning one into a
-  variable declared outside, is a compile error reading `required by a bound in
-  Runtime::scope`. The cost is that an unrelated `!Send` capture (an `Rc`, a
-  `RefCell` borrow) is refused too, with a diagnostic about threads when no
-  thread is involved; construct such values inside the closure, or move them in.
+  its return type and of the closure, and `Value`, `Table`, `Fn`, `TcpClient`,
+  `QConnection`, `Poll` and `Subscription` are all `!Send` — so returning one,
+  or assigning one into a variable declared outside, is a compile error reading
+  `required by a bound in Runtime::scope`. The cost is that an unrelated
+  `!Send` capture (an `Rc`, a `RefCell` borrow) is refused too, with a
+  diagnostic about threads when no thread is involved; construct such values
+  inside the closure, or move them in.
 
 - **Breaking: `is_live()` is now `on_runtime_thread()`**, and answers a
   per-thread question rather than a per-process one. A live runtime is required
