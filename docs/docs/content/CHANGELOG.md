@@ -7,6 +7,23 @@ All notable changes to `rayforce` are documented here. This project adheres to
 
 ### Added
 
+- **Q subscriptions.** A `QConnection` can now be handed to the event loop with
+  [`attach`](documentation/ipc.md), turning it into a `Subscription` that
+  receives frames the peer pushes unsolicited — a tickerplant or a dict-form
+  publisher. The plain client could not do this: it is blocking
+  request/response, so a pushed frame would be read as the answer to the next
+  call.
+
+  New `Poll` (the runtime's event loop), `Subscription`
+  (`send` / `execute` / `is_alive`), and `env::bind_vary` / `env::bind_unary`
+  for binding a Rust handler under the name a publisher calls. A handler is a
+  type implementing `env::VaryFn` / `env::UnaryFn`; the generated trampoline
+  borrows the arguments and catches panics, so the whole surface is safe.
+
+- **`Value::attrs`** — the attribute byte. Rarely needed, but it is the only
+  way to tell a keyed table (a 2-element list carrying `RAY_ATTR_DICT`) from a
+  plain list, which no type code distinguishes.
+
 - **CI runs the suite against a debug-flavour engine.** Set
   `RAYFORCE_CORE_DEBUG=1` and `rayforce-sys` builds `librayforce.a` with
   `-DDEBUG`, which compiles in the core's invariant checks and its stale
@@ -25,6 +42,10 @@ All notable changes to `rayforce` are documented here. This project adheres to
   `q` server, which cannot be provisioned on a runner.
 
 ### Changed
+
+- `rayforce-sys` now compiles `rayforce-q`'s `q_server.c` alongside `q.c`, and
+  its pinned sources move to core **v2.5.15** and rayforce-q **2.1.0**. 2.1.0 is
+  a hard floor — the `q_conn_*` API does not exist in 2.0.0.
 
 - **`Runtime::new` refuses while a previous heap is still pinned.** Handles that
   outlive their runtime keep its heap mapped, and the core permits exactly one

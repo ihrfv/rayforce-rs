@@ -29,18 +29,20 @@ jobs:
 
       # Pin the same refs as rayforce-sys/build.rs so a source build here
       # matches what a crates.io consumer gets.
-      - name: Checkout RayforceDB core (v2.5.1)
+      - name: Checkout RayforceDB core (v2.5.15)
         uses: actions/checkout@v4
         with:
           repository: RayforceDB/rayforce
-          ref: 'v2.5.1'
+          ref: 'v2.5.15'
           path: rayforce-core
 
-      - name: Checkout rayforce-q client (2.0.0)
+      # 2.1.0 is a floor, not a preference: q_server.c and its q_conn_* API
+      # do not exist in 2.0.0, and rayforce-sys now compiles it.
+      - name: Checkout rayforce-q client (2.1.0)
         uses: actions/checkout@v4
         with:
           repository: RayforceDB/rayforce-q
-          ref: '2.0.0'
+          ref: '2.1.0'
           path: rayforce-q
 
       - name: Install toolchain deps
