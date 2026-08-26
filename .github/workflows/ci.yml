@@ -23,6 +23,13 @@ jobs:
         # rayforce-sys/build.rs. ASan cannot see into the engine's mmap-backed
         # pool allocator, so DFD is the only tool for this bug class.
         core: [release, debug]
+    env:
+      # Job-scoped, not step-scoped: the core binary is built in its own step and
+      # must use the same flavour, or build.rs would see a flavour flip at
+      # `cargo test` time and `make clean` the binary away. Empty on the release
+      # leg — build.rs and the core's dfd_enabled() both read empty as off.
+      RAYFORCE_CORE_DEBUG: ${{ matrix.core == 'debug' && '1' || '' }}
+      RAY_DFD: ${{ matrix.core == 'debug' && '1' || '' }}
     steps:
       - name: Checkout bindings
         uses: actions/checkout@v4
@@ -75,10 +82,20 @@ jobs:
         if: matrix.core == 'release'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # tests/ipc.rs spawns a real server to exercise TcpClient — the path
+      # Runtime's poll teardown lives on. Without a binary it returns early and
+      # reports as a pass, so that coverage was silently absent from CI.
+      #
+      # Ordering matters: `cargo build` runs build.rs, which does `make lib` at
+      # this leg's flavour. `make release` then reuses those objects untouched
+      # and only adds main.c plus the link, so the binary inherits the flavour
+      # (on the debug leg it carries DFD too, checking the server side as well).
+      - name: Build the core server binary
+        run: |
+          cargo build --workspace --tests
+          make -C "$RAYFORCE_SRC" release
+          echo "RAYFORCE_BINARY=$RAYFORCE_SRC/rayforce" >> "$GITHUB_ENV"
+          echo "RAYFORCE_REQUIRE_SERVER=1" >> "$GITHUB_ENV"
+
       - name: Test
-        env:
-          # Empty on the release leg. build.rs and the core's own dfd_enabled()
-          # both treat empty and "0" as off, so the release leg is unaffected.
-          RAYFORCE_CORE_DEBUG: ${{ matrix.core == 'debug' && '1' || '' }}
-          RAY_DFD: ${{ matrix.core == 'debug' && '1' || '' }}
         run: cargo test --workspace
