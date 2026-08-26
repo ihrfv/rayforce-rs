@@ -130,3 +130,26 @@ fn connect_failure_is_an_error() {
     let port = free_port();
     assert!(TcpClient::connect("127.0.0.1", port, "", "").is_err());
 }
+
+#[test]
+fn a_client_outliving_its_runtime_closes_safely() {
+    // The hole no generation check ever covered: `TcpClient` carried no epoch,
+    // so its `Drop` called `ray_ipc_close` into a heap that may already have
+    // been unmapped. It now holds a heap handle, so the unmap waits for it.
+    let bin = require_binary!();
+    let port = free_port();
+    let _server = spawn_server(&bin, port);
+
+    let client = {
+        let _rt = Runtime::new().unwrap();
+        TcpClient::connect("127.0.0.1", port, "", "").unwrap()
+    };
+    // The guard is gone, so the client can no longer be *used* — building a
+    // request needs a live runtime. Closing it must still be safe, and that is
+    // the whole point: `ray_ipc_close` reaches into the engine, and the heap is
+    // still mapped precisely because the client pins it.
+    drop(client);
+
+    // Last handle out, so the heap was released and a new runtime can start.
+    let _rt2 = Runtime::new().unwrap();
+}

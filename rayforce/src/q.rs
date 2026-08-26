@@ -18,23 +18,31 @@ use std::marker::PhantomData;
 use rayforce_sys as sys;
 
 use crate::error::{check, RayError, Result};
+use crate::runtime::{acquire_handle, assert_live, release_handle};
 use crate::value::Value;
 
 /// An open connection to a Q server. Closed on drop.
 ///
-/// `!Send`/`!Sync`: `execute` interns symbols and builds engine objects, both
-/// of which belong to the thread that owns the [`crate::Runtime`]. Moving one
-/// to another thread must not compile:
+/// Holds a handle on the engine heap for its lifetime: `q_close` runs on drop
+/// and reaches into the runtime, so the heap has to still be mapped then. A
+/// connection outliving its [`crate::Runtime`] therefore defers the unmap,
+/// exactly as a [`Value`] does.
+///
+/// # Safety
+///
+/// `!Send`/`!Sync`, and must stay so: `execute` interns symbols and builds
+/// engine objects, and the heap handle is `Relaxed` — all of which belong to
+/// the thread that owns the [`crate::Runtime`].
 ///
 /// ```compile_fail
 /// fn assert_send<T: Send>() {}
 /// assert_send::<rayforce::QConnection>();
 /// ```
-///
-/// The control for that test — identical but for the `Send` bound. A
-/// `compile_fail` block passes whenever the code fails to build *for any
-/// reason*, so without this a renamed type or a typo would read as a pass:
-///
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<rayforce::QConnection>();
+/// ```
+/// Control — `compile_fail` passes on *any* build failure, a rename included:
 /// ```
 /// fn assert_exists<T>() {}
 /// assert_exists::<rayforce::QConnection>();
@@ -60,6 +68,7 @@ impl QConnection {
         password: &str,
         timeout_ms: i32,
     ) -> Result<Self> {
+        assert_live("QConnection::connect");
         let host_c = CString::new(host).map_err(|_| RayError::binding("Q host contains NUL"))?;
         let user_c = CString::new(user).map_err(|_| RayError::binding("Q user contains NUL"))?;
         let pass_c =
@@ -83,6 +92,7 @@ impl QConnection {
                 "Q: connect to {host}:{port} {reason}"
             )));
         }
+        acquire_handle();
         Ok(QConnection {
             fd,
             _not_send: PhantomData,
@@ -114,7 +124,10 @@ impl QConnection {
 
 impl Drop for QConnection {
     fn drop(&mut self) {
+        // Close first, while the heap is certainly still mapped; only then give
+        // the handle back, which may unmap it.
         unsafe { sys::q_close(self.fd) };
+        release_handle();
     }
 }
 
@@ -127,6 +140,7 @@ impl Drop for QConnection {
 /// and must run on the thread that owns the [`crate::Runtime`] (like every
 /// other constructor in this crate). A Q server-side error surfaces as `Err`.
 pub fn decode_response(msg: &[u8]) -> Result<Value> {
+    assert_live("q::decode_response");
     // q_header_t (q.c): endianness, msgtype, compressed, reserved, u32 size.
     // `size` counts the whole message, header included. Little-endian wire only.
     const HEADER_LEN: usize = 8;

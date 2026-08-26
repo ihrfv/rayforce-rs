@@ -10,7 +10,7 @@
 //! does not have. A guard dropped while handles are out defers the unmap; the
 //! last handle performs it.
 
-use rayforce::{Runtime, Value};
+use rayforce::{Runtime, TcpClient, Value};
 
 #[test]
 fn a_value_outliving_its_runtime_stays_readable() {
@@ -107,5 +107,22 @@ fn value_is_one_pointer_wide() {
         std::mem::size_of::<Value>(),
         std::mem::size_of::<*mut ()>(),
         "Value grew a field — did a liveness tag creep back?"
+    );
+}
+
+#[test]
+fn a_failed_connection_does_not_pin_the_heap() {
+    {
+        let _rt = Runtime::new().unwrap();
+        // Nothing is listening on port 1; the connect must fail *without*
+        // taking a heap handle, or a routine connection error would strand the
+        // heap for the rest of the process.
+        assert!(TcpClient::connect("127.0.0.1", 1, "", "").is_err());
+    }
+    let rt2 = Runtime::new();
+    assert!(
+        rt2.is_ok(),
+        "a failed connect leaked a heap handle: {:?}",
+        rt2.err()
     );
 }

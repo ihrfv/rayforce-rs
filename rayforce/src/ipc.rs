@@ -5,6 +5,7 @@
 //! are process-local; the client is `!Send`/`!Sync` like the rest of the crate.
 
 use crate::error::{check, materialize, RayError, Result};
+use crate::runtime::{acquire_handle, assert_live, release_handle};
 use crate::value::Value;
 use rayforce_sys as sys;
 use std::ffi::CString;
@@ -22,6 +23,30 @@ unsafe fn ensure_poll() {
 }
 
 /// A synchronous IPC connection to a RayforceDB server.
+///
+/// Holds a handle on the engine heap for its lifetime: `ray_ipc_close` runs on
+/// drop and reaches into the runtime, so the heap has to still be mapped then.
+/// A client outliving its [`crate::Runtime`] therefore defers the unmap, exactly
+/// as a [`Value`] does.
+///
+/// # Safety
+///
+/// `!Send`/`!Sync`, and must stay so: it builds engine objects and takes a heap
+/// handle, both of which belong to the runtime thread.
+///
+/// ```compile_fail
+/// fn assert_send<T: Send>() {}
+/// assert_send::<rayforce::TcpClient>();
+/// ```
+/// ```compile_fail
+/// fn assert_sync<T: Sync>() {}
+/// assert_sync::<rayforce::TcpClient>();
+/// ```
+/// Control — `compile_fail` passes on *any* build failure, a rename included:
+/// ```
+/// fn assert_exists<T>() {}
+/// assert_exists::<rayforce::TcpClient>();
+/// ```
 pub struct TcpClient {
     handle: i64,
     _not_send: PhantomData<*mut ()>,
@@ -31,6 +56,7 @@ impl TcpClient {
     /// Connect to `host:port`, optionally authenticating. Requires a live
     /// [`crate::Runtime`].
     pub fn connect(host: &str, port: u16, user: &str, password: &str) -> Result<TcpClient> {
+        assert_live("TcpClient::connect");
         let host_c = CString::new(host).map_err(|_| RayError::binding("host contains NUL"))?;
         let user_c = CString::new(user).map_err(|_| RayError::binding("user contains NUL"))?;
         let pass_c =
@@ -45,6 +71,7 @@ impl TcpClient {
                     "connect to {host}:{port} failed"
                 )));
             }
+            acquire_handle();
             Ok(TcpClient {
                 handle,
                 _not_send: PhantomData,
@@ -90,6 +117,10 @@ impl TcpClient {
 
 impl Drop for TcpClient {
     fn drop(&mut self) {
+        // Close first, while the heap is certainly still mapped — closing a
+        // connection releases engine objects held for it. Only then give the
+        // handle back, which may unmap.
         unsafe { sys::ray_ipc_close(self.handle) }
+        release_handle();
     }
 }
