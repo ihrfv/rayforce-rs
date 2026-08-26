@@ -38,6 +38,37 @@ ray_t* ray_de(ray_t* bytes);
 /* src/core/runtime.c — last per-VM error message (set alongside a RAY_ERROR) */
 const char* ray_error_msg(void);
 
+/* ===== Poll-driven subscriptions =====
+ *
+ * The pieces a subscriber needs that the public header still does not export.
+ * Signatures copied verbatim from the core sources, as above. */
+
+/* src/core/poll.h — the selector API, included rather than hand-declared so the
+ * `ray_selector` layout comes from the core itself. `ray_poll_get` returns NULL
+ * once the rx machine has deregistered a selector, which is how a peer
+ * disconnect is detected: there is no error, it simply stops resolving. Its
+ * `data` field is the per-connection state, and doubles as the connection's
+ * identity — selector ids are reused as soon as a slot frees up. */
+#include "core/poll.h"
+
+/* src/lang/eval.h:55,57 — the native function-pointer shapes. `vary` is the
+ * one a q push handler wants: a dict-form publisher calls `upd` with one
+ * argument and a kdb+ tickerplant with two, so a fixed arity drops one of
+ * them. */
+typedef ray_t* (*ray_unary_fn)(ray_t*);
+typedef ray_t* (*ray_vary_fn)(ray_t**, int64_t);
+
+/* src/lang/env.h:32,34 — wrap a native function as a callable ray_t. */
+ray_t* ray_fn_unary(const char* name, uint8_t fn_attrs, ray_unary_fn fn);
+ray_t* ray_fn_vary(const char* name, uint8_t fn_attrs, ray_vary_fn fn);
+
+/* src/lang/env.h:57,64 — bind it into the global environment so a pushed frame
+ * naming it dispatches there. Both binders are needed: ray_env_bind walks the
+ * dotted-segment dicts, while rayforce-q's inbound symbol lookup hits the FLAT
+ * binding. rayforce-q's own embed/rayforce_q.c:174-179 calls both. */
+ray_err_t ray_env_bind(int64_t sym_id, ray_t* val);
+ray_err_t ray_env_bind_flat(int64_t sym_id, ray_t* val);
+
 /* The poll object the IPC client needs (ray_poll_create / ray_runtime_get_poll
  * / ray_runtime_set_poll) is exported by the public header as of core v2.5.8,
  * so it is no longer hand-declared here. ray_poll_create now returns the typed

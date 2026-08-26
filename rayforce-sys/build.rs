@@ -18,9 +18,9 @@ use std::process::Command;
 /// these in lockstep with a `rayforce-sys` release. Override at build time with
 /// the `RAYFORCE_REPO` / `RAYFORCE_REF` (and `_Q_` variants) env vars.
 const RAYFORCE_REPO: &str = "https://github.com/RayforceDB/rayforce.git";
-const RAYFORCE_REF: &str = "v2.5.8";
+const RAYFORCE_REF: &str = "v2.5.15";
 const RAYFORCE_Q_REPO: &str = "https://github.com/RayforceDB/rayforce-q.git";
-const RAYFORCE_Q_REF: &str = "2.0.0";
+const RAYFORCE_Q_REF: &str = "2.1.0";
 
 fn main() {
     let core = core_src_dir();
@@ -37,27 +37,42 @@ fn main() {
     sanitize_libclang_path();
     build_core_lib(&core);
 
-    // --- Q IPC client (rayforce-q's q.c) ---
-    // Linked BEFORE librayforce so its undefined `ray_*` symbols resolve from
-    // the core archive. Needs the core's private `src/` on the include path
-    // (`table/sym.h`).
+    // --- Q IPC client + server (rayforce-q's q.c / q_server.c) ---
+    // Linked BEFORE librayforce so their undefined `ray_*` symbols resolve from
+    // the core archive. Both need the core's private `src/` on the include path:
+    // `q.c` for `table/sym.h`, `q_server.c` for `core/poll.h` and `lang/env.h`.
+    //
+    // `q_server.c` is what makes a *subscription* possible. `q.c`'s client is
+    // blocking request/response, so a frame the peer pushes unsolicited would be
+    // read as the answer to the next `q_send`. `q_conn_attach` hands the fd to a
+    // rayforce poll instead, which reads every frame and routes it by message
+    // type. Requires rayforce-q >= 2.1.0.
     let q_src = q_src_dir();
     let q_c = q_src.join("q.c");
+    let q_server_c = q_src.join("q_server.c");
     assert!(
         q_c.exists(),
         "rayforce-q client not found at {}.\n\
          Set RAYFORCE_Q_SRC to your rayforce-q checkout (default: ~/rayforce-q).",
         q_c.display()
     );
+    assert!(
+        q_server_c.exists(),
+        "rayforce-q server not found at {}.\n\
+         It ships with rayforce-q >= 2.1.0; older checkouts have only q.c.",
+        q_server_c.display()
+    );
     cc::Build::new()
         .file(&q_c)
+        .file(&q_server_c)
         .include(&q_src)
         .include(&include)
         .include(core.join("src"))
         .warnings(false)
         .compile("rayforce_q");
-    println!("cargo:rerun-if-changed={}", q_c.display());
-    println!("cargo:rerun-if-changed={}", q_src.join("q.h").display());
+    for f in ["q.c", "q.h", "q_server.c", "q_server.h"] {
+        println!("cargo:rerun-if-changed={}", q_src.join(f).display());
+    }
     println!("cargo:rerun-if-env-changed=RAYFORCE_Q_SRC");
 
     // --- linking ---
@@ -74,6 +89,10 @@ fn main() {
     let bindings = bindgen::Builder::default()
         .header("wrapper.h")
         .clang_arg(format!("-I{}", include.display()))
+        // wrapper.h includes `core/poll.h` for the real `ray_selector` layout,
+        // which lives in the core's private `src/` rather than its public
+        // include dir.
+        .clang_arg(format!("-I{}", core.join("src").display()))
         // Keep the surface tight and deterministic.
         .allowlist_function("ray_.*")
         .allowlist_type("ray_.*")
