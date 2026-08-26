@@ -223,10 +223,85 @@ fn sanitize_libclang_path() {
     }
 }
 
+/// Which flavour of `librayforce.a` to link.
+///
+/// `Release` is the default and what every published build uses. `Debug` adds
+/// `-DDEBUG`, which compiles in the core's invariant checks and its stale
+/// retain/release detector (`ray_dfd_check_live` in `src/mem/cow.c`) — the only
+/// tool that can see a use-after-free inside the engine's `mmap`-backed pool
+/// allocator, which ASan and Valgrind are structurally blind to. Opt in with
+/// `RAYFORCE_CORE_DEBUG=1`, then run with `RAY_DFD=1` to arm the detector.
+///
+/// Both flavours compile to the same object names, so switching forces a full
+/// rebuild of the core (see the stamp handling in [`build_core_lib`]). CI never
+/// pays that — each matrix leg is a fresh checkout building one flavour. Locally
+/// it bites whenever you alternate, because `cargo clippy` and a debug
+/// `cargo test` share one `RAYFORCE_SRC` tree; point the debug work at a second
+/// checkout via `RAYFORCE_SRC` if the rebuilds get tiresome.
+#[derive(PartialEq, Eq, Clone, Copy)]
+enum Flavour {
+    Release,
+    Debug,
+}
+
+impl Flavour {
+    /// The stamp recorded next to the archive; also the `make clean` trigger.
+    fn tag(self) -> &'static str {
+        match self {
+            Flavour::Release => "release",
+            Flavour::Debug => "debug",
+        }
+    }
+}
+
+/// Read the flavour from `RAYFORCE_CORE_DEBUG`, using the same truthiness rule
+/// as the core's own `dfd_enabled()` (`src/mem/heap.c`): set, non-empty, not
+/// `"0"`. The empty-string case is not hypothetical — a GitHub Actions
+/// conditional expression yields `''` for its false branch.
+fn core_flavour() -> Flavour {
+    println!("cargo:rerun-if-env-changed=RAYFORCE_CORE_DEBUG");
+    match env::var("RAYFORCE_CORE_DEBUG") {
+        Ok(v) if !v.is_empty() && v != "0" => Flavour::Debug,
+        _ => Flavour::Release,
+    }
+}
+
 fn build_core_lib(core: &Path) {
-    let status = Command::new("make")
-        .arg("lib")
-        .current_dir(core)
+    let flavour = core_flavour();
+
+    // Both flavours compile to the same `.rel.o` object names, so make would
+    // consider objects from the *other* flavour up to date and archive a
+    // mixed-flavour library. Clean when the recorded flavour differs.
+    let stamp = core.join(".rayforce-rs-flavour");
+    // An unstamped tree is assumed release: that is what every build predating
+    // this stamp produced, so there is nothing to clean.
+    let previous = std::fs::read_to_string(&stamp)
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|_| Flavour::Release.tag().to_string());
+    if previous != flavour.tag() {
+        println!(
+            "cargo:warning=core flavour changed {previous} -> {}; running `make clean`",
+            flavour.tag()
+        );
+        let _ = Command::new("make").arg("clean").current_dir(core).status();
+    }
+
+    let mut cmd = Command::new("make");
+    cmd.arg("lib").current_dir(core);
+    if flavour == Flavour::Debug {
+        // `DEBUG_CFLAGS` from the core's Makefile minus `-fsanitize=address,
+        // undefined`: the sanitizers cannot see into the pool allocator (the
+        // engine says so itself, `src/mem/heap.c`) and linking their runtime
+        // into every Rust test binary buys nothing for the cost. `$(WARNS)`,
+        // `$(STD)` and `$(RAY_MARCH)` are expanded by make from its own
+        // definitions, so only the flavour delta is restated here.
+        cmd.arg(
+            "RELEASE_CFLAGS=-fPIC $(WARNS) -std=$(STD) -g -O0 \
+             -march=$(RAY_MARCH) -DDEBUG -fno-omit-frame-pointer",
+        );
+    }
+
+    let status = cmd
         .status()
         .expect("failed to invoke `make` to build librayforce.a");
     assert!(
@@ -240,4 +315,8 @@ fn build_core_lib(core: &Path) {
         "make lib succeeded but librayforce.a is missing in {}",
         core.display()
     );
+
+    // Only stamp a build that got all the way through, so a failed switch
+    // re-cleans on the next attempt instead of trusting a half-built tree.
+    let _ = std::fs::write(&stamp, flavour.tag());
 }
