@@ -5,12 +5,35 @@ All notable changes to `rayforce` are documented here. This project adheres to
 
 ## Unreleased
 
+### Added
+
+- **Q subscriptions.** A `QConnection` can now be handed to the event loop with
+  [`attach`](documentation/ipc.md), turning it into a `Subscription` that
+  receives frames the peer pushes unsolicited — a tickerplant or a dict-form
+  publisher. The plain client could not do this: it is blocking
+  request/response, so a pushed frame would be read as the answer to the next
+  call.
+
+  New `Poll` (the runtime's event loop), `Subscription`
+  (`send` / `execute` / `is_alive`), and `env::bind_vary` / `env::bind_unary`
+  for binding a Rust handler under the name a publisher calls. A handler is a
+  type implementing `env::VaryFn` / `env::UnaryFn`; the generated trampoline
+  borrows the arguments and catches panics, so the whole surface is safe.
+  `Poll` and `Subscription` are `!Send` like every other engine-backed handle,
+  so `Runtime::scope` refuses to let them out.
+
+- **`Value::attrs`** — the attribute byte. Rarely needed, but it is the only
+  way to tell a keyed table (a 2-element list carrying `RAY_ATTR_DICT`) from a
+  plain list, which no type code distinguishes.
+
 ### Changed
 
+- **`rayforce-sys` compiles `rayforce-q`'s `q_server.c` alongside `q.c`.**
+  rayforce-q 2.1.0 is a floor rather than a preference — the `q_conn_*` API
+  does not exist in 2.0.0.
+
 - **The vendored `rayforce-q` is `cdbdecb`** (from `1eabaf4`); it has no tag
-  past 2.1.1, and `cdbdecb` is its `master`. `q.h` is unchanged, and only
-  `q.c` is built here, so `rayforce-q`'s server-side changes do not reach this
-  crate.
+  past 2.1.1, and `cdbdecb` is its `master`. `q.h` is unchanged.
 
 - **q minute, second and month values decode by unit.** `QConnection::execute`
   and `q::decode_response` re-tagged them without converting: a minute or
