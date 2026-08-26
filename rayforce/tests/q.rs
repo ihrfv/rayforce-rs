@@ -110,3 +110,41 @@ fn q_surfaces_server_error() {
     let conn = QConnection::connect("127.0.0.1", port).unwrap();
     assert!(conn.execute("1+`a").is_err());
 }
+
+#[test]
+fn encode_round_trips_through_decode() {
+    let _rt = Runtime::new().unwrap();
+
+    // `q::encode` produces a complete message; `q::decode_response` consumes
+    // one. Together they are the two halves of a transport you own yourself.
+    let v = rayforce::Value::vec(&[1i64, 2, 3]);
+    let frame = rayforce::q::encode(&v).unwrap();
+
+    // Header: little-endian, SYNC (the encoder always stamps SYNC), not
+    // compressed, and a size covering the whole message.
+    assert_eq!(frame[0], 1, "little-endian flag");
+    assert_eq!(frame[1], 1, "encoder stamps SYNC");
+    assert_eq!(frame[2], 0, "uncompressed");
+    assert_eq!(
+        u32::from_le_bytes([frame[4], frame[5], frame[6], frame[7]]) as usize,
+        frame.len()
+    );
+
+    let back = rayforce::q::decode_response(&frame).unwrap();
+    assert_eq!(back.as_slice::<i64>().unwrap(), &[1, 2, 3]);
+}
+
+#[test]
+fn encoded_frame_can_be_retyped_as_a_push() {
+    let _rt = Runtime::new().unwrap();
+    // A publisher retypes byte 1 in place to send an unsolicited frame.
+    let mut frame = rayforce::q::encode(&rayforce::Value::i64(42)).unwrap();
+    frame[1] = 0; // ASYNC
+    assert_eq!(
+        rayforce::q::decode_response(&frame)
+            .unwrap()
+            .as_i64()
+            .unwrap(),
+        42
+    );
+}
