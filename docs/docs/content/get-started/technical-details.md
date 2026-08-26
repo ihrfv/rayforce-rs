@@ -39,18 +39,26 @@ assert_eq!(a.as_slice::<i64>()?, &[1, 2, 3]);
 ```
 
 Because lifetime is handled for you, there is no manual `free` and no
-use-after-free: the borrow checker and `Drop` keep handles honest.
+use-after-free: `Drop` keeps handles honest.
+
+There is a second reference count you never see. The one above counts handles
+to an *object*; the engine also needs to know when its *heap* can be unmapped,
+and `ray_runtime_destroy` unmaps it without consulting any object's refcount.
+So every `Value` also holds a handle on the heap, which is why a value can
+safely outlive the `Runtime` that made it — see below.
 
 ## :material-cpu-64-bit: Single runtime, single thread, `!Send`
 
 The RayforceDB core runs on a single thread with a thread-local VM and permits
 **one live `Runtime` per process**. To make this safe in Rust:
 
-- `Runtime::new()` returns an RAII guard. Hold it alive for as long as you touch
-  any `Value`; dropping it tears the runtime down.
-- `Value`, `Table`, and `TcpClient` are **`!Send`** and **`!Sync`**. They cannot
-  be moved or shared across threads, which statically prevents you from touching
-  the engine from a thread other than the one that owns the runtime.
+- `Runtime::new()` returns an RAII guard. Hold it for as long as you do any
+  work. Dropping it unmaps the engine heap — but only once nothing points into
+  it, so a value that outlives the guard defers the unmap rather than dangling.
+- `Value`, `Table`, `TcpClient` and `QConnection` are **`!Send`** and
+  **`!Sync`**. They cannot be moved or shared across threads, which statically
+  prevents you from touching the engine from a thread other than the one that
+  owns the runtime.
 
 ```rust
 use rayforce::{Runtime, Value};
@@ -60,6 +68,27 @@ let v = Value::i64(42);
 // `v` stays on this thread — it is !Send by design.
 # Ok::<(), rayforce::RayError>(())
 ```
+
+### What a dropped `Runtime` still allows
+
+One rule: a live guard is required for everything **except reading and dropping
+handles you already hold**.
+
+```rust
+use rayforce::{Runtime, Value};
+
+let v = {
+    let _rt = Runtime::new()?;
+    Value::i64(1)
+};
+assert_eq!(v.as_i64()?, 1);   // fine: the heap is still mapped, `v` pins it
+drop(v);                      // last handle out — the heap is unmapped here
+# Ok::<(), rayforce::RayError>(())
+```
+
+Calling `eval` or a constructor without a guard panics rather than working
+against a runtime nobody owns, and `Runtime::new()` returns an error while a
+previous heap is still pinned, naming how many handles are outstanding.
 
 !!! note "Why single-thread?"
     The engine's VM state is thread-local. Rather than hide this behind locks,
