@@ -13,6 +13,7 @@
 
 mod convert;
 mod dict;
+pub mod env;
 mod error;
 mod expr;
 mod ipc;
