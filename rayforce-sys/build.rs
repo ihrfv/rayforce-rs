@@ -24,7 +24,7 @@ use std::process::Command;
 ///
 /// Must match the tag `vendor/rayforce` is pinned to. CI asserts the two agree;
 /// see the "Check vendored core pin" step in `.github/workflows/ci.yml`.
-const CORE_VERSION: &str = "2.5.8";
+const CORE_VERSION: &str = "2.5.15";
 
 /// Commit the `vendor/rayforce` submodule is pinned to, stamped alongside
 /// [`CORE_VERSION`]. Also checked by CI's "Check vendored core pin" step.
@@ -35,7 +35,7 @@ const CORE_VERSION: &str = "2.5.8";
 /// under OUT_DIR, an unset value does not fall back to "unknown" — it silently
 /// reports the HEAD of whatever unrelated repository happens to enclose the
 /// build directory.
-const CORE_COMMIT: &str = "f0d4bb4";
+const CORE_COMMIT: &str = "605723d";
 
 /// Warning flags for the vendored core build — the core's own `WARNS`
 /// (`Makefile:30`) minus `-Werror`. Consumers compile this with whatever
@@ -159,11 +159,11 @@ fn main() {
         .clang_arg(format!("-I{}", core.join("src").display()))
         // bindgen 0.70 cannot resolve C11 atomics and aborts the whole parse
         // with "Couldn't resolve constant type" — reached here via
-        // `lang/internal.h` -> `mem/heap.h:442`, the only header declaring
+        // `lang/internal.h` -> `mem/heap.h:447`, the only header declaring
         // ray_{set,get}_splayed_fn / ray_get_parted_fn. Defining the keyword
         // away costs nothing: the only two atomics in the parse are the file
-        // scope globals `ray_heap_pending_merge` (`mem/heap.h:442`) and
-        // `ray_parallel_flag` (`core/platform.h:179`), neither allowlisted, and
+        // scope globals `ray_heap_pending_merge` (`mem/heap.h:447`) and
+        // `ray_parallel_flag` (`core/platform.h:182`), neither allowlisted, and
         // no generated type contains one — `include/rayforce.h` never says
         // `_Atomic`. So no layout bindgen emits can shift. This affects only
         // bindgen's parse; the core itself is compiled by its own Makefile.
@@ -175,7 +175,7 @@ fn main() {
         // OUT_DIR, which may itself contain regex metacharacters.
         .allowlist_file(".*/include/rayforce\\.h")
         // The public header leaves ray_runtime_s incomplete (`rayforce.h:656`)
-        // and `core/runtime.h:114` completes it. Left alone, bindgen would
+        // and `core/runtime.h:117` completes it. Left alone, bindgen would
         // publish the runtime internals — ray_vm_t and friends, ~67 KB of
         // private layout that would then churn on every core bump. Opaque
         // keeps it a handle, which is all the public API ever passes around.
