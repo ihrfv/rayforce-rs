@@ -20,6 +20,12 @@ All notable changes to `rayforce` are documented here. This project adheres to
   type implementing `env::VaryFn` / `env::UnaryFn`; the generated trampoline
   borrows the arguments and catches panics, so the whole surface is safe.
 
+- **Q listener.** `Poll::serve_q(port)` registers the `rayforce-q` listener on
+  the runtime's event loop, returning a `QListener`. Peers are served while the
+  loop runs: a sync string is evaluated and answered, an async `(upd; payload)`
+  is dispatched to whatever `upd` names in the environment. A runtime that
+  defines `upd` in Rayfall and serves a port is what `rayforce -q` is, embedded.
+
 - **`q::encode`** — the mirror of `q::decode_response`: turn a `Value` into a
   complete Q wire message for a transport you own. Together they let you write
   a Q *publisher*, not just a client.
