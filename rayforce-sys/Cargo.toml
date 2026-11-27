@@ -37,6 +37,7 @@ include = [
     "vendor/rayforce-q/q.h",
     "vendor/rayforce-q/q_server.c",
     "vendor/rayforce-q/q_server.h",
+    "vendor/rayforce-q/embed/rayforce_q.c",
     "vendor/rayforce-q/LICENSE",
 ]
 

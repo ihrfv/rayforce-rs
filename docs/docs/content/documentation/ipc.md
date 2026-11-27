@@ -314,6 +314,32 @@ The `QListener` is a handle, not an owner: the socket belongs to the poll and
 closes with the runtime, and dropping the handle does not stop serving. Port 0
 is refused, so pick the port yourself.
 
+Every runtime has rayforce-q's own `.q.*` verbs, as its binary does: `.q.on`
+installs a hook for the q frames of every connection, inbound or attached, and
+`.q.handle`, `.q.post` and `.q.dispatch_sync` work as rayforce-q's README
+describes. A hook takes the request as data in place of evaluating it:
+
+```rust
+use rayforce::{Poll, Runtime};
+
+Runtime::scope(|rt| {
+    rt.eval("(set seen (table [head n] (list ['none] [0])))")?;
+    rt.eval("(.q.on 'async (fn [r] (insert 'seen (list (first r) (count r)))))")?;
+    let poll = Poll::install()?;
+    poll.set_restricted(true)?;   // before the first accept or attach
+    let _listener = poll.serve_q(5010)?;
+    loop {
+        poll.run_for(200)?;
+    }
+})?;
+# Ok::<(), rayforce::RayError>(())
+```
+
+With the poll restricted, a peer's source text is refused with `access`, and
+its own requests cannot call `.q.on`, `.q.post`, `.q.connect` or any other
+builtin marked restricted. The hook is the embedder's code, so it runs
+unrestricted and may insert what it was handed.
+
 ## :material-shield-check: Serving IPC
 
 `Poll::serve_ipc(port)` serves the native IPC, the wire `rayforce -p` serves and

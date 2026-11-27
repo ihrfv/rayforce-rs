@@ -183,15 +183,37 @@ fn main() {
          checkout, or unset it to build the vendored one.",
         q_src.display()
     );
+    // `embed/rayforce_q.c` is rayforce-q's own glue: `q_env_register`, which
+    // binds the `.q.*` verbs (`.q.on`, `.q.dispatch_sync`, `.q.post`, ...) in a
+    // runtime, as rayforce-q's binary does. Without it an embedding cannot
+    // install a q hook, and a sync frame on a hooked connection is evaluated
+    // as `(.q.dispatch_sync (quote <request>))` (`eval_request` in
+    // q_server.c) against a verb nobody bound. Reused rather than copied, so
+    // which verbs are `RAY_FN_RESTRICTED` stays rayforce-q's call.
+    let q_embed_c = q_src.join("embed/rayforce_q.c");
+    assert!(
+        q_embed_c.exists(),
+        "rayforce-q's verb glue not found at {}.\n\
+         Point RAYFORCE_Q_SRC at a rayforce-q checkout that ships embed/, \
+         or unset it to build the vendored one.",
+        q_embed_c.display()
+    );
     cc::Build::new()
         .file(&q_c)
         .file(&q_server_c)
+        .file(&q_embed_c)
         .include(&q_src)
         .include(&include)
         .include(core.join("src"))
         .warnings(false)
         .compile("rayforce_q");
-    for f in ["q.c", "q.h", "q_server.c", "q_server.h"] {
+    for f in [
+        "q.c",
+        "q.h",
+        "q_server.c",
+        "q_server.h",
+        "embed/rayforce_q.c",
+    ] {
         println!("cargo:rerun-if-changed={}", q_src.join(f).display());
     }
 

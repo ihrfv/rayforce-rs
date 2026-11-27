@@ -16,6 +16,17 @@ All notable changes to `rayforce` are documented here. This project adheres to
   made, so call it before the listener's first accept and before the first
   attach. On a handle that outlived its runtime it returns an error, as
   `run_for` does.
+- **rayforce-q's `.q.*` verbs in every runtime.** `rayforce-sys` compiles
+  rayforce-q's `embed/rayforce_q.c`, and each runtime calls its
+  `q_env_register` when it starts, as rayforce-q's binary does. So `.q.on`
+  hooks, `.q.dispatch_sync`, `.q.handle`, `.q.post`, `.q.handles`,
+  `.q.readonly` and the client verbs exist in an embedding. A sync frame on a
+  connection with a sync hook used to fail with `name`, because rayforce-q
+  evaluates it as `(.q.dispatch_sync (quote <request>))`. The verbs that
+  connect, send, post, list connections or install a hook are registered
+  restricted, so a restricted peer gains none of them. The runtime releases a
+  hook set before any poll existed when it is dropped. `rayforce-sys` binds
+  `q_env_register` and `q_hooks_release`.
 
 ## 1.5.0
 

@@ -416,3 +416,21 @@ fn a_connection_accepted_before_restricting_keeps_its_mode() {
     })
     .unwrap();
 }
+
+/// rayforce-q registers each `.q.*` verb that connects, sends, posts, lists
+/// connections or installs a hook `RAY_FN_RESTRICTED` (its
+/// embed/rayforce_q.c, `q_env_register`), so restricting the poll keeps a
+/// client from replacing the writer's `.q.on` hooks.
+#[test]
+fn a_restricted_client_cannot_install_a_q_hook() {
+    Runtime::scope(|_rt| {
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
+        let port = ipc.port();
+        let reply = with_client(&poll, move || ipc::ask(port, "(.q.on 'async 0)"));
+        assert_eq!(reply, Reply::Error("access".into()));
+        Ok(())
+    })
+    .unwrap();
+}
