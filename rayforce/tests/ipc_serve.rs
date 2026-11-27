@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 use rayforce::{By, Clock, Ended, ErrorCode, Poll, Runtime};
 use support::ipc::{self, Reply};
 use support::wire::{char_vec, frame, long_atom, read_frame, RESPONSE, SYNC};
+use support::{RECORDING_HOOK, SEEN};
 
 const BUDGET: Duration = Duration::from_secs(10);
 
@@ -415,6 +416,39 @@ fn a_restricted_client_cannot_install_a_q_hook() {
         let port = ipc.port();
         let reply = with_client(&poll, move || ipc::ask(port, "(.q.on 'async 0)"));
         assert_eq!(reply, Reply::Error("access".into()));
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// rayforce-q registers `.q.dispatch_sync` unrestricted, and it runs the q
+/// sync hook with the restriction lifted (its q_server.c, `q_hook_apply`).
+/// So a restricted client hands the embedder's hook data of its own choosing,
+/// and the hook's insert lands where the client's own insert is refused. This
+/// pins today's behaviour. If the call starts failing with `access`,
+/// rayforce-q has closed the gap: flip these assertions and correct
+/// `Poll::set_restricted` and the IPC guide.
+#[test]
+fn a_restricted_client_reaches_a_q_sync_hook_through_dispatch_sync() {
+    Runtime::scope(|rt| {
+        rt.eval(SEEN)?;
+        rt.eval(&format!(
+            "(.q.on 'sync (fn [r] (do ({RECORDING_HOOK} r) 42)))"
+        ))?;
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
+        let port = ipc.port();
+        let (direct, dispatched) = with_client(&poll, move || {
+            (
+                ipc::ask(port, "(insert 'seen (list 'direct 1))"),
+                ipc::ask(port, "(.q.dispatch_sync (list 'eod 7))"),
+            )
+        });
+        assert_eq!(direct, Reply::Error("access".into()));
+        assert_eq!(dispatched, Reply::Long(42), "the hook answered");
+        assert_eq!(rt.eval("(count seen)")?.as_i64()?, 2);
+        assert_eq!(rt.eval("(last (at seen 'head))")?.as_sym()?, "eod");
         Ok(())
     })
     .unwrap();

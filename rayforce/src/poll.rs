@@ -164,14 +164,27 @@ impl Poll {
     /// aggregations are allowed. The core's `storage/ipc.md`, "-U (password +
     /// restricted mode)", has the whole rule.
     ///
-    /// The flag is the poll's, one for all its listeners, and a connection
-    /// copies it when it is made: a Rayforce IPC connection the listener
-    /// accepts, a q connection [`Poll::serve_q`] accepts, and a q connection
-    /// attached with [`crate::q::QConnection::attach`]. A connection made
-    /// before the call keeps the mode it was made with. So call this before
-    /// the listener's first accept and before the first attach. On a
-    /// restricted q connection, pushed source text is refused whole
-    /// (rayforce-q's README, "For an untrusted Q peer").
+    /// The flag is the poll's, one for all its listeners, and every connection
+    /// on the poll copies it when it is made. Inbound, that is a Rayforce IPC
+    /// connection the listener accepts and a q connection [`Poll::serve_q`]
+    /// accepts. Outbound, it is a [`crate::TcpClient`] or `.ipc.open`, and a q
+    /// connection from [`crate::q::QConnection::attach`] or `.q.connect`. On
+    /// an outbound connection it restricts what the server pushes back. A
+    /// connection made before the call keeps the mode it was made with. So
+    /// call this before the listener's first accept and before the first
+    /// outbound connection.
+    ///
+    /// A restricted q connection refuses a bare string of source text
+    /// (rayforce-q's README, "For an untrusted Q peer"). It does not refuse
+    /// `(.q.dispatch_sync; "text")` on a frame kind no `.q.on` hook covers,
+    /// because rayforce-q registers `.q.dispatch_sync` unrestricted. With no
+    /// q sync hook, that runs the text under the restricted rule above. With
+    /// one, the hook runs unrestricted on whatever the caller passed. A
+    /// restricted Rayforce IPC client can call `.q.dispatch_sync` too, so a
+    /// runtime with both a q sync hook and a Rayforce IPC listener has to
+    /// check the caller in the hook. In the sync hook, `(.q.handle)` is -1
+    /// when no q connection is calling, as for a Rayforce IPC client or a
+    /// journal replay outside a q handler.
     ///
     /// Fails, as [`Poll::run_for`] does, when this handle outlived its
     /// runtime.
