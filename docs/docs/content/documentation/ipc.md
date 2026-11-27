@@ -335,10 +335,20 @@ Runtime::scope(|rt| {
 # Ok::<(), rayforce::RayError>(())
 ```
 
-With the poll restricted, a peer's source text is refused with `access`, and
-its own requests cannot call `.q.on`, `.q.post`, `.q.connect` or any other
-builtin marked restricted. The hook is the embedder's code, so it runs
-unrestricted and may insert what it was handed.
+With the poll restricted, a peer's bare string of source text is refused with
+`access`, and its own requests cannot call `.q.on`, `.q.post`, `.q.connect` or
+any other builtin marked restricted. The hook is the embedder's code, so it
+runs unrestricted and may insert what it was handed.
+
+`.q.dispatch_sync` is not marked restricted, so a restricted caller can still
+reach it. A q peer can, on a frame kind no hook covers, and so can a restricted
+Rayforce IPC client. With no sync hook, it evaluates the request under the
+restricted rule, so `(.q.dispatch_sync; "(+ 40 2)")` answers 42 and a `set`
+sent that way is refused. With a sync hook, the hook runs unrestricted on
+whatever the caller passed. A runtime with both a sync hook and a Rayforce IPC
+listener therefore has to check the caller in the hook. In the sync hook,
+`(.q.handle)` is -1 when no q connection is calling, as for a Rayforce IPC
+client or a journal replay outside a q handler.
 
 ## :material-shield-check: Serving IPC
 
@@ -381,9 +391,12 @@ evaluated; and whether it was `Answered`, `Failed` with the core's error code, o
   budget against them, with `poll.set_restricted(true)?` before `start`. A
   restricted client's `set` or `del` of a hook, and any other builtin the core
   marks restricted, is refused with `access`. The flag belongs to the poll and
-  each connection copies it when it is made, so it covers the Q listener and
-  an attached q connection made after it too, and leaves one made before it
-  as it was.
+  each connection copies it when it is made. So it covers every connection
+  made after it, inbound or outbound, the Q listener's, an attached q
+  connection's and a `TcpClient`'s too. A connection made before it stays as
+  it was. On an outbound connection it restricts what the server pushes back. A
+  restricted client can still reach a q sync hook, which runs unrestricted,
+  through `.q.dispatch_sync`, as "Serving the Q wire" above says.
 - As with the Q listener, the socket closes only with the runtime. Dropping the
   `IpcServer` stops the guard, not the serving.
 - A zero budget, which would cancel every request, and port 0 are refused.

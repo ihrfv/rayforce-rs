@@ -122,8 +122,9 @@ fn an_async_push_reaches_a_rayfall_function() {
 }
 
 /// The listener's connections copy the poll's restricted flag when it
-/// accepts them, and a restricted q connection refuses source text whole
-/// (rayforce-q's README, "For an untrusted Q peer").
+/// accepts them, and a restricted q connection refuses a bare string of
+/// source text (rayforce-q's README, "For an untrusted Q peer"). The next
+/// test sends the same text in a form it does not refuse.
 #[test]
 fn a_restricted_listener_refuses_source_text() {
     Runtime::scope(|_rt| {
@@ -142,6 +143,41 @@ fn a_restricted_listener_refuses_source_text() {
             .expect_err("an error, not a value")
             .to_string();
         assert!(refused.contains("access"), "refused with access: {refused}");
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// rayforce-q registers `.q.dispatch_sync` unrestricted (its
+/// embed/rayforce_q.c, `q_env_register`), so a restricted peer can send
+/// source text as `(.q.dispatch_sync; "text")` on a frame no hook covers.
+/// With no sync hook the text runs under the restricted rule, so a read
+/// answers and a `set` is refused. This pins today's behaviour. If the read
+/// starts failing with `access`, rayforce-q has closed the gap: flip that
+/// assertion and correct `Poll::set_restricted` and the IPC guide.
+#[test]
+fn a_restricted_peer_runs_source_text_through_dispatch_sync() {
+    Runtime::scope(|rt| {
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let port = free_port();
+        let _listener = poll.serve_q(port)?;
+
+        let peer = connect(port);
+        let sock = pump_until(&poll, || peer.try_recv().ok()).expect("logged in");
+        let dispatch = |text: &str| {
+            let request = list(&[sym_atom(".q.dispatch_sync"), char_vec(text)]);
+            let reply = send_sync(&sock, request);
+            let (_, body) = pump_until(&poll, || reply.try_recv().ok()).expect("answered");
+            q::decode_response(&frame(RESPONSE, &body))
+        };
+
+        assert_eq!(dispatch("(+ 40 2)")?.as_i64()?, 42);
+        let refused = dispatch("(set zz 1)")
+            .expect_err("an error, not a value")
+            .to_string();
+        assert!(refused.contains("access"), "refused with access: {refused}");
+        assert!(rt.eval("zz").is_err(), "the refused set bound nothing");
         Ok(())
     })
     .unwrap();

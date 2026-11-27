@@ -30,7 +30,9 @@
 //! budget against its own clients serves them in restricted mode: call
 //! [`Poll::set_restricted`] before [`ServeIpc::start`], and a client's `set` or
 //! `del` of a hook is refused with `access`. The flag is the poll's, so it
-//! restricts a q connection attached to the same poll later too.
+//! restricts the poll's other connections made later too, and
+//! [`Poll::set_restricted`] lists them and what a restricted client can still
+//! reach.
 
 use std::ffi::CString;
 use std::marker::PhantomData;

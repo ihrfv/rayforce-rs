@@ -5,3 +5,10 @@
 
 pub mod ipc;
 pub mod wire;
+
+/// A hook that takes every request it is handed as data and inserts it, which
+/// a restricted request may not do on its own.
+pub const RECORDING_HOOK: &str = "(fn [r] (insert 'seen (list (first r) (count r))))";
+
+/// The table `RECORDING_HOOK` inserts into, with one placeholder row.
+pub const SEEN: &str = "(set seen (table [head n] (list ['none] [0])))";

@@ -19,6 +19,7 @@ use support::wire::{
     char_vec, dict, drain_one, frame, list, long_atom, long_vec, read_frame, sym_atom, sym_vec,
     ASYNC, RESPONSE, SYNC,
 };
+use support::{RECORDING_HOOK, SEEN};
 
 /// A publisher: handshake, answer one sync request, then push `pushes`.
 ///
@@ -387,8 +388,8 @@ fn attaching_leaves_the_next_scope_startable() {
 /// A q connection copies the poll's restricted flag when it is attached
 /// (rayforce-q's README, "For an untrusted Q peer, call
 /// `ray_poll_set_restricted(poll, true)` before `q_serve` or `q_conn_attach`").
-/// Pushed source text is then refused whole, and a pushed call still reaches
-/// a handler the embedder bound.
+/// A bare string of pushed source text is then refused, and a pushed call
+/// still reaches a handler the embedder bound.
 #[test]
 fn a_restricted_subscription_refuses_pushed_source_and_takes_calls() {
     Runtime::scope(|rt| {
@@ -442,13 +443,6 @@ fn spawn_sync_publisher(request: Vec<u8>) -> (u16, Receiver<(u8, Vec<u8>)>) {
     });
     (port, rx)
 }
-
-/// A hook that takes every pushed frame as data and inserts it, which a
-/// restricted request may not do on its own.
-const RECORDING_HOOK: &str = "(fn [r] (insert 'seen (list (first r) (count r))))";
-
-/// The table `RECORDING_HOOK` inserts into, with one placeholder row.
-const SEEN: &str = "(set seen (table [head n] (list ['none] [0])))";
 
 #[test]
 fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
