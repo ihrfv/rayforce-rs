@@ -15,7 +15,7 @@ use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
-use rayforce::{Poll, Runtime};
+use rayforce::{q, Poll, Runtime};
 use support::wire::{
     char_vec, dict, frame, list, long_atom, long_vec, read_frame, sym_atom, sym_vec, ASYNC,
     RESPONSE, SYNC,
@@ -138,10 +138,10 @@ fn a_restricted_listener_refuses_source_text() {
         let (msgtype, body) = pump_until(&poll, || reply.try_recv().ok()).expect("answered");
 
         assert_eq!(msgtype, RESPONSE);
-        // A q error: type -128, then its text up to a NUL.
-        assert_eq!(body[0] as i8, -128, "an error, not a value");
-        let text = String::from_utf8_lossy(&body[1..]);
-        assert!(text.starts_with("access"), "refused with access: {text}");
+        let refused = q::decode_response(&frame(RESPONSE, &body))
+            .expect_err("an error, not a value")
+            .to_string();
+        assert!(refused.contains("access"), "refused with access: {refused}");
         Ok(())
     })
     .unwrap();

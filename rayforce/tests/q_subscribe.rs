@@ -8,7 +8,7 @@ mod support;
 
 use std::cell::RefCell;
 use std::io::{Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
@@ -37,37 +37,43 @@ fn spawn_publisher(
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     thread::spawn(move || {
-        if let Ok((mut sock, _)) = listener.accept() {
-            // Handshake: the client sends "user:pass" + capability + NUL (just
-            // {0x03, 0x00} when anonymous); the server replies with one byte.
-            let mut byte = [0u8; 1];
-            while sock.read_exact(&mut byte).is_ok() && byte[0] != 0 {}
-            let _ = sock.write_all(&[3u8]);
-
-            // One sync request (the subscribe) -> one RESPONSE.
-            if !drain_one(&mut sock) {
+        let Some(mut sock) = accept_subscriber(&listener, &ack) else {
+            return;
+        };
+        for p in &pushes {
+            if sock.write_all(&frame(ASYNC, p)).is_err() {
                 return;
             }
-            let _ = sock.write_all(&frame(RESPONSE, &ack));
-
-            for p in &pushes {
-                if sock.write_all(&frame(ASYNC, p)).is_err() {
-                    return;
-                }
-            }
-
-            match close_after {
-                Some(d) => thread::sleep(d),
-                // Block until the client goes away, so we never close first.
-                None => {
-                    let mut sink = [0u8; 64];
-                    while matches!(sock.read(&mut sink), Ok(n) if n > 0) {}
-                }
-            }
-            // Drop `sock`, closing the connection.
         }
+        match close_after {
+            Some(d) => thread::sleep(d),
+            None => linger(&mut sock),
+        }
+        // Drop `sock`, closing the connection.
     });
     port
+}
+
+/// Accept one client, log it in and answer its one sync request (the
+/// subscribe) with `ack`. `None` if it hung up before asking.
+fn accept_subscriber(listener: &TcpListener, ack: &[u8]) -> Option<TcpStream> {
+    let (mut sock, _) = listener.accept().ok()?;
+    // Handshake: the client sends "user:pass" + capability + NUL (just
+    // {0x03, 0x00} when anonymous); the server replies with one byte.
+    let mut byte = [0u8; 1];
+    while sock.read_exact(&mut byte).is_ok() && byte[0] != 0 {}
+    let _ = sock.write_all(&[3u8]);
+    if !drain_one(&mut sock) {
+        return None;
+    }
+    let _ = sock.write_all(&frame(RESPONSE, ack));
+    Some(sock)
+}
+
+/// Block until the client goes away, so the publisher never closes first.
+fn linger(sock: &mut TcpStream) {
+    let mut sink = [0u8; 64];
+    while matches!(sock.read(&mut sink), Ok(n) if n > 0) {}
 }
 
 // --- Handlers -------------------------------------------------------------
@@ -100,9 +106,14 @@ impl env::UnaryFn for OnEod {
 
 /// Pump the loop until `f` holds or the budget runs out.
 fn pump_until(poll: &Poll, mut f: impl FnMut() -> bool) -> bool {
+    pump_until_some(poll, || f().then_some(())).is_some()
+}
+
+/// Pump the loop until `f` yields or the budget runs out.
+fn pump_until_some<T>(poll: &Poll, mut f: impl FnMut() -> Option<T>) -> Option<T> {
     for _ in 0..100 {
-        if f() {
-            return true;
+        if let Some(v) = f() {
+            return Some(v);
         }
         poll.run_for(20).unwrap();
     }
@@ -420,35 +431,29 @@ fn spawn_sync_publisher(request: Vec<u8>) -> (u16, Receiver<(u8, Vec<u8>)>) {
     let port = listener.local_addr().unwrap().port();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let Ok((mut sock, _)) = listener.accept() else {
+        let Some(mut sock) = accept_subscriber(&listener, &long_vec(&[])) else {
             return;
         };
-        let mut byte = [0u8; 1];
-        while sock.read_exact(&mut byte).is_ok() && byte[0] != 0 {}
-        let _ = sock.write_all(&[3u8]);
-        if !drain_one(&mut sock) {
-            return;
-        }
-        let _ = sock.write_all(&frame(RESPONSE, &long_vec(&[])));
         let _ = sock.write_all(&frame(SYNC, &request));
         if let Some(reply) = read_frame(&mut sock) {
             let _ = tx.send(reply);
         }
-        // Linger until the client hangs up, as `spawn_publisher` does.
-        let mut sink = [0u8; 64];
-        while matches!(sock.read(&mut sink), Ok(n) if n > 0) {}
+        linger(&mut sock);
     });
     (port, rx)
 }
 
-/// What the writer's hook does: take every pushed frame as data and insert
-/// it, which a restricted request may not do on its own.
+/// A hook that takes every pushed frame as data and inserts it, which a
+/// restricted request may not do on its own.
 const RECORDING_HOOK: &str = "(fn [r] (insert 'seen (list (first r) (count r))))";
+
+/// The table `RECORDING_HOOK` inserts into, with one placeholder row.
+const SEEN: &str = "(set seen (table [head n] (list ['none] [0])))";
 
 #[test]
 fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
     Runtime::scope(|rt| {
-        rt.eval("(set seen (table [head n] (list ['none] [0])))")?;
+        rt.eval(SEEN)?;
         rt.eval(&format!("(.q.on 'async {RECORDING_HOOK})"))?;
 
         // Nothing binds `upd`, so evaluating the push would fail with `name`.
@@ -478,7 +483,7 @@ fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
 #[test]
 fn a_sync_frame_reaches_the_sync_hook_on_a_restricted_poll() {
     Runtime::scope(|rt| {
-        rt.eval("(set seen (table [head n] (list ['none] [0])))")?;
+        rt.eval(SEEN)?;
         rt.eval(&format!(
             "(.q.on 'sync (fn [r] (do ({RECORDING_HOOK} r) 42)))"
         ))?;
@@ -490,17 +495,10 @@ fn a_sync_frame_reaches_the_sync_hook_on_a_restricted_poll() {
         let sub = QConnection::connect("127.0.0.1", port)?.attach(&poll)?;
         sub.execute(".u.sub[`trade;`]")?;
 
-        let mut answered = None;
-        assert!(
-            pump_until(&poll, || {
-                answered = answered.take().or_else(|| reply.try_recv().ok());
-                answered.is_some()
-            }),
-            "the sync frame should be answered"
-        );
+        let answered = pump_until_some(&poll, || reply.try_recv().ok());
         assert_eq!(
-            answered,
-            Some((RESPONSE, long_atom(42))),
+            answered.expect("the sync frame should be answered"),
+            (RESPONSE, long_atom(42)),
             "the hook's value"
         );
         assert_eq!(rt.eval("(at (at seen 'head) 1)")?.as_sym()?, "eod");
