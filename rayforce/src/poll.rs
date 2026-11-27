@@ -175,11 +175,13 @@ impl Poll {
     /// outbound connection.
     ///
     /// A restricted q connection refuses a bare string of source text
-    /// (rayforce-q's README, "For an untrusted Q peer"). It does not refuse
-    /// `(.q.dispatch_sync; "text")` on a frame kind no `.q.on` hook covers,
-    /// because rayforce-q registers `.q.dispatch_sync` unrestricted. With no
-    /// q sync hook, that runs the text under the restricted rule above. With
-    /// one, the hook runs unrestricted on whatever the caller passed. A
+    /// (rayforce-q's README, "For an untrusted Q peer"). A hook `.q.on`
+    /// installed is the embedder's code, so it runs unrestricted on whatever
+    /// the peer sent (rayforce-q's q_server.c, `q_hook_apply`). The connection
+    /// does not refuse `(.q.dispatch_sync; "text")` on a frame kind no `.q.on`
+    /// hook covers, because rayforce-q registers `.q.dispatch_sync`
+    /// unrestricted. With no q sync hook, that runs the text under the
+    /// restricted rule above. With one, the hook gets the caller's data. A
     /// restricted Rayforce IPC client can call `.q.dispatch_sync` too, so a
     /// runtime with both a q sync hook and a Rayforce IPC listener has to
     /// check the caller in the hook. In the sync hook, `(.q.handle)` is -1
