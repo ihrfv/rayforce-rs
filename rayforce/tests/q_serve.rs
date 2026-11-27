@@ -16,6 +16,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
 use rayforce::{q, Poll, Runtime};
+use support::pump_until;
 use support::wire::{
     char_vec, dict, frame, list, long_atom, long_vec, read_frame, sym_atom, sym_vec, ASYNC,
     RESPONSE, SYNC,
@@ -34,17 +35,6 @@ fn free_port() -> u16 {
             return port;
         }
     }
-}
-
-/// Pump the loop until `f` yields or the budget runs out.
-fn pump_until<T>(poll: &Poll, mut f: impl FnMut() -> Option<T>) -> Option<T> {
-    for _ in 0..100 {
-        if let Some(v) = f() {
-            return Some(v);
-        }
-        poll.run_for(20).unwrap();
-    }
-    f()
 }
 
 /// Connect and log in anonymously on a helper thread, handing the socket back
