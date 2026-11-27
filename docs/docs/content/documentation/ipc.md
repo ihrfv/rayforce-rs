@@ -317,7 +317,10 @@ is refused, so pick the port yourself.
 Every runtime has rayforce-q's own `.q.*` verbs, as its binary does: `.q.on`
 installs a hook for the q frames of every connection, inbound or attached, and
 `.q.handle`, `.q.post` and `.q.dispatch_sync` work as rayforce-q's README
-describes. A hook takes the request as data in place of evaluating it:
+describes. The exception is a runtime that ends with an inbound q connection
+still open. Its `'close` hook sees `(.q.handle)` as -1 and cannot `.q.post`,
+so it should use the handle it gets as its argument. A hook takes the request
+as data in place of evaluating it:
 
 ```rust
 use rayforce::{Poll, Runtime};

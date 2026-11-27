@@ -218,6 +218,15 @@ impl Drop for Runtime {
             // engine objects held for it — so it has to go down first, while
             // the heap is still there. `ray_runtime_destroy` does not do this
             // itself, so a process that only ever used a `TcpClient` leaked it.
+            //
+            // It is detached before the destroy. Left attached, a native
+            // `.ipc.on.close` hook that calls `.q.on` during the destroy would
+            // register a new `.q.on` anchor in a slot the loop has already passed,
+            // leaking a pipe and a selector each teardown. In exchange a
+            // `.q.on 'close` hook run here sees `(.q.handle)` as -1 and cannot
+            // `.q.post`, so it has only its argument. The core's binary
+            // destroys the poll still attached (`src/app/main.c`), the order
+            // to take if an embedder needs `.q.handle` in that hook.
             let poll = sys::ray_runtime_get_poll();
             if !poll.is_null() {
                 sys::ray_runtime_set_poll(ptr::null_mut());
