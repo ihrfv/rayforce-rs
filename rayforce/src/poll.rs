@@ -157,11 +157,13 @@ impl Poll {
     /// restricted, or not.
     ///
     /// A restricted request cannot call a builtin the core registers
-    /// `RAY_FN_RESTRICTED`, such as `set`, `del`, `insert`, `.sys.exec` or
-    /// `.ipc.open`, and binds a name only in a frame it opened itself, so it
-    /// cannot rebind a global other code reads or install a connection hook.
-    /// Such a call answers with the error `access`. Reads, queries and
-    /// aggregations are allowed. The core's `storage/ipc.md`, "-U (password +
+    /// `RAY_FN_RESTRICTED`, such as `set`, `del`, `.sys.exec` or `.ipc.open`,
+    /// and binds a name only in a frame it opened itself, so it cannot rebind
+    /// a global other code reads or install a connection hook. Such a call
+    /// answers with the error `access`. Reads, queries and aggregations are
+    /// allowed. `update`, `delete`, `insert` and `upsert` run on a table value
+    /// and answer a new table, but are refused on a named target such as
+    /// `(insert 't row)`. The core's `storage/ipc.md`, "-U (password +
     /// restricted mode)", has the whole rule.
     ///
     /// The flag is the poll's, one for all its listeners, and every connection

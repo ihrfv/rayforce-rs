@@ -315,6 +315,32 @@ fn on_a_restricted_poll_a_read_is_answered_and_a_write_refused() {
     .unwrap();
 }
 
+/// The core refuses `update` only on a named target (the core's
+/// docs/docs/storage/ipc.md, "update, delete, insert and upsert"), so a
+/// restricted reader can still compute a column. The value spelling answers a
+/// new table and leaves `t` as it was.
+#[test]
+fn on_a_restricted_poll_update_runs_on_a_table_value_and_not_on_a_name() {
+    Runtime::scope(|rt| {
+        rt.eval(SMALL)?;
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
+        let port = ipc.port();
+        let (value, named) = with_client(&poll, move || {
+            (
+                ipc::ask(port, "(count (key (update {b: (+ a 1) from: t})))"),
+                ipc::ask(port, "(update {b: 0 from: 't})"),
+            )
+        });
+        assert_eq!(value, Reply::Long(2), "the new table has a and b");
+        assert_eq!(named, Reply::Error("access".into()));
+        assert_eq!(rt.eval("(count (key t))")?.as_i64()?, 1, "t is unchanged");
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn a_restricted_client_cannot_replace_the_guards_hooks() {
     Runtime::scope(|_rt| {

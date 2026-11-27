@@ -10,7 +10,8 @@ All notable changes to `rayforce` are documented here. This project adheres to
 - **`Poll::set_restricted` turns on the core's restricted mode from safe
   code.** It wraps `ray_poll_set_restricted`. Every connection the poll makes
   from then on evaluates without the builtins the core registers
-  `RAY_FN_RESTRICTED`, `set`, `insert` and `.sys.exec` among them. It binds
+  `RAY_FN_RESTRICTED`, `set` and `.sys.exec` among them, and without
+  `update`, `delete`, `insert` and `upsert` on a named target. It binds
   only in frames it opened itself, so a client cannot rebind the hooks
   `Poll::serve_ipc` guards it with. Outbound connections copy the flag too,
   which restricts what their server pushes. A connection copies the flag when
