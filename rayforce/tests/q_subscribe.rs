@@ -10,12 +10,14 @@ use std::cell::RefCell;
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
 use std::time::Duration;
 
 use rayforce::{env, q::QConnection, Poll, Runtime, Value};
 use support::wire::{
-    char_vec, dict, drain_one, frame, list, long_vec, sym_atom, sym_vec, ASYNC, RESPONSE,
+    char_vec, dict, drain_one, frame, list, long_atom, long_vec, read_frame, sym_atom, sym_vec,
+    ASYNC, RESPONSE, SYNC,
 };
 
 /// A publisher: handshake, answer one sync request, then push `pushes`.
@@ -398,6 +400,110 @@ fn a_restricted_subscription_refuses_pushed_source_and_takes_calls() {
             "the pushed call should reach its handler"
         );
         assert!(rt.eval("leaked").is_err(), "the pushed source ran");
+        Ok(())
+    })
+    .unwrap();
+}
+
+// --- rayforce-q's verbs ---------------------------------------------------
+//
+// Every runtime registers rayforce-q's `.q.*` verbs, as rayforce-q's own
+// binary does (its embed/rayforce_q.c, `q_env_register`). A hook installed
+// with `.q.on` is the embedder's code, so it runs unrestricted on a
+// restricted connection and gets the request as data (rayforce-q's README,
+// "For an untrusted Q peer").
+
+/// A publisher that answers the subscribe, then sends one SYNC frame and
+/// hands back the subscriber's reply to it.
+fn spawn_sync_publisher(request: Vec<u8>) -> (u16, Receiver<(u8, Vec<u8>)>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let Ok((mut sock, _)) = listener.accept() else {
+            return;
+        };
+        let mut byte = [0u8; 1];
+        while sock.read_exact(&mut byte).is_ok() && byte[0] != 0 {}
+        let _ = sock.write_all(&[3u8]);
+        if !drain_one(&mut sock) {
+            return;
+        }
+        let _ = sock.write_all(&frame(RESPONSE, &long_vec(&[])));
+        let _ = sock.write_all(&frame(SYNC, &request));
+        if let Some(reply) = read_frame(&mut sock) {
+            let _ = tx.send(reply);
+        }
+        // Linger until the client hangs up, as `spawn_publisher` does.
+        let mut sink = [0u8; 64];
+        while matches!(sock.read(&mut sink), Ok(n) if n > 0) {}
+    });
+    (port, rx)
+}
+
+/// What the writer's hook does: take every pushed frame as data and insert
+/// it, which a restricted request may not do on its own.
+const RECORDING_HOOK: &str = "(fn [r] (insert 'seen (list (first r) (count r))))";
+
+#[test]
+fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
+    Runtime::scope(|rt| {
+        rt.eval("(set seen (table [head n] (list ['none] [0])))")?;
+        rt.eval(&format!("(.q.on 'async {RECORDING_HOOK})"))?;
+
+        // Nothing binds `upd`, so evaluating the push would fail with `name`.
+        let call = list(&[sym_atom("upd"), long_vec(&[1, 2, 3])]);
+        let port = spawn_publisher(long_vec(&[]), vec![call], None);
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let sub = QConnection::connect("127.0.0.1", port)?.attach(&poll)?;
+        sub.execute(".u.sub[`trade;`]")?;
+
+        assert!(
+            pump_until(&poll, || rt
+                .eval("(count seen)")
+                .is_ok_and(|n| n.as_i64().is_ok_and(|n| n == 2))),
+            "the hook should have inserted the push"
+        );
+        assert_eq!(rt.eval("(at (at seen 'head) 1)")?.as_sym()?, "upd");
+        assert_eq!(rt.eval("(at (at seen 'n) 1)")?.as_i64()?, 2);
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// rayforce-q answers a sync frame, once a sync hook is set, by evaluating
+/// `(.q.dispatch_sync (quote <request>))` (its q_server.c, `eval_request`),
+/// so the verb has to exist in the runtime for the hook to be reached.
+#[test]
+fn a_sync_frame_reaches_the_sync_hook_on_a_restricted_poll() {
+    Runtime::scope(|rt| {
+        rt.eval("(set seen (table [head n] (list ['none] [0])))")?;
+        rt.eval(&format!(
+            "(.q.on 'sync (fn [r] (do ({RECORDING_HOOK} r) 42)))"
+        ))?;
+
+        let request = list(&[sym_atom("eod"), long_vec(&[7])]);
+        let (port, reply) = spawn_sync_publisher(request);
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let sub = QConnection::connect("127.0.0.1", port)?.attach(&poll)?;
+        sub.execute(".u.sub[`trade;`]")?;
+
+        let mut answered = None;
+        assert!(
+            pump_until(&poll, || {
+                answered = answered.take().or_else(|| reply.try_recv().ok());
+                answered.is_some()
+            }),
+            "the sync frame should be answered"
+        );
+        assert_eq!(
+            answered,
+            Some((RESPONSE, long_atom(42))),
+            "the hook's value"
+        );
+        assert_eq!(rt.eval("(at (at seen 'head) 1)")?.as_sym()?, "eod");
         Ok(())
     })
     .unwrap();

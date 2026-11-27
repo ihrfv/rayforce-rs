@@ -141,6 +141,23 @@ extern "C" {
     /// Close an attached connection and release its state. Illegal once the rx
     /// machine has already deregistered the selector — check `ray_poll_get`.
     pub fn q_conn_close(poll: *mut ray_poll_t, id: i64);
+    /// Release every `.q.on` hook while the heap is still alive. A poll the
+    /// runtime holds does this when it is destroyed; a runtime destroyed
+    /// without one needs it before `ray_runtime_destroy` (q_server.h, "Hooks").
+    /// Idempotent: a released slot is empty.
+    pub fn q_hooks_release();
+}
+
+// rayforce-q's verb glue (embed/rayforce_q.c), hand-declared to match it: the
+// file ships no header, and rayforce-q's binary declares this the same way,
+// `extern` in the main.c its Makefile patches.
+extern "C" {
+    /// Bind rayforce-q's `.q.*` verbs in the current runtime, the ones that
+    /// connect, send, post, list connections or install a hook as
+    /// `RAY_FN_RESTRICTED`. Call once after `ray_runtime_create`, for every
+    /// runtime: it also drops hooks an earlier runtime left in the
+    /// process-global slots, whose heap is gone.
+    pub fn q_env_register();
 }
 
 /// `q_connect` failure codes (mirrors `q.h`).

@@ -182,6 +182,10 @@ impl Runtime {
             LIVE.store(false, Ordering::SeqCst);
             return Err(RayError::binding("ray_runtime_create failed"));
         }
+        // rayforce-q's `.q.*` verbs, in every runtime as in rayforce-q's own
+        // binary, so a `.q.on` hook can take what a q connection pushes. It
+        // also forgets the hooks an earlier runtime left behind.
+        unsafe { sys::q_env_register() };
         // `ray_runtime_create` bound `__VM` to this thread and nowhere else.
         OWNS_RUNTIME.set(true);
         Ok(Runtime {
@@ -219,6 +223,10 @@ impl Drop for Runtime {
                 sys::ray_runtime_set_poll(ptr::null_mut());
                 sys::ray_poll_destroy(poll.cast());
             }
+            // A `.q.on` hook lives on this heap. The poll released it above
+            // if the hook reached one; one set before any poll existed is
+            // released here, while the heap is still there (q_server.h).
+            sys::q_hooks_release();
             sys::ray_runtime_destroy(self.rt);
         }
         // `Runtime` is `!Send` and never leaves `scope`, so this runs on the
