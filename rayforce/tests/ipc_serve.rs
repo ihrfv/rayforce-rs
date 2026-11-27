@@ -10,7 +10,7 @@ mod support;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -387,28 +387,13 @@ fn a_connection_accepted_before_restricting_keeps_its_mode() {
         let poll = Poll::install()?;
         let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
         let port = ipc.port();
-        let (connected_tx, connected) = mpsc::channel();
-        let (restricted_tx, restricted) = mpsc::channel();
-        let client = thread::spawn(move || {
-            // The server answers the handshake after it accepted.
-            let mut early = ipc::connect(port);
-            connected_tx.send(()).unwrap();
-            restricted.recv().unwrap();
-            ipc::send(&mut early, "(set x 1)");
-            let early = ipc::reply(&mut early);
-            (early, ipc::ask(port, "(set y 1)"))
-        });
-        // Empty while the client connects; disconnected if it panicked, which
-        // the join below reports.
-        while matches!(connected.try_recv(), Err(mpsc::TryRecvError::Empty)) {
-            poll.run_for(20)?;
-        }
+        // The server answers the handshake after it accepted.
+        let mut early = with_client(&poll, move || ipc::connect(port));
         poll.set_restricted(true)?;
-        restricted_tx.send(()).unwrap();
-        while !client.is_finished() {
-            poll.run_for(20)?;
-        }
-        let (early, late) = client.join().unwrap();
+        let (early, late) = with_client(&poll, move || {
+            ipc::send(&mut early, "(set x 1)");
+            (ipc::reply(&mut early), ipc::ask(port, "(set y 1)"))
+        });
         assert_eq!(early, Reply::Long(1), "accepted before, so unrestricted");
         assert_eq!(late, Reply::Error("access".into()), "accepted after");
         assert_eq!(rt.eval("x")?.as_i64()?, 1);
@@ -420,7 +405,7 @@ fn a_connection_accepted_before_restricting_keeps_its_mode() {
 /// rayforce-q registers each `.q.*` verb that connects, sends, posts, lists
 /// connections or installs a hook `RAY_FN_RESTRICTED` (its
 /// embed/rayforce_q.c, `q_env_register`), so restricting the poll keeps a
-/// client from replacing the writer's `.q.on` hooks.
+/// client from replacing an embedder's `.q.on` hooks.
 #[test]
 fn a_restricted_client_cannot_install_a_q_hook() {
     Runtime::scope(|_rt| {
