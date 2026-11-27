@@ -198,23 +198,20 @@ fn main() {
          or unset it to build the vendored one.",
         q_embed_c.display()
     );
+    // One list drives both the compile and its rerun lines, so a source
+    // cannot be compiled without cargo watching it for an edit under
+    // RAYFORCE_Q_SRC. The headers are watched only.
+    let q_sources = [&q_c, &q_server_c, &q_embed_c];
     cc::Build::new()
-        .file(&q_c)
-        .file(&q_server_c)
-        .file(&q_embed_c)
+        .files(q_sources)
         .include(&q_src)
         .include(&include)
         .include(core.join("src"))
         .warnings(false)
         .compile("rayforce_q");
-    for f in [
-        "q.c",
-        "q.h",
-        "q_server.c",
-        "q_server.h",
-        "embed/rayforce_q.c",
-    ] {
-        println!("cargo:rerun-if-changed={}", q_src.join(f).display());
+    let q_headers = [q_h, q_src.join("q_server.h")];
+    for f in q_sources.into_iter().chain(&q_headers) {
+        println!("cargo:rerun-if-changed={}", f.display());
     }
 
     // --- linking ---
