@@ -12,11 +12,12 @@ All notable changes to `rayforce` are documented here. This project adheres to
   from then on evaluates without the builtins the core registers
   `RAY_FN_RESTRICTED`, `set`, `insert` and `.sys.exec` among them. It binds
   only in frames it opened itself, so a client cannot rebind the hooks
-  `Poll::serve_ipc` guards it with. Outbound connections, a `TcpClient` or an
-  attached q connection, copy the flag too, which restricts what their server
-  pushes. A connection copies the flag when it is made, so call it before the
-  listener's first accept and before the first outbound connection. On a
-  handle that outlived its runtime it returns an error, as `run_for` does.
+  `Poll::serve_ipc` guards it with. Outbound connections copy the flag too,
+  which restricts what their server pushes. A connection copies the flag when
+  it is made, so call it before the listener's first accept and before the
+  first outbound connection. Its documentation lists the connections that copy
+  the flag and what a restricted caller can still reach. On a handle that
+  outlived its runtime it returns an error, as `run_for` does.
 - **rayforce-q's `.q.*` verbs in every runtime.** `rayforce-sys` compiles
   rayforce-q's `embed/rayforce_q.c`, and each runtime calls its
   `q_env_register` when it starts, as rayforce-q's binary does. So `.q.on`
@@ -26,10 +27,10 @@ All notable changes to `rayforce` are documented here. This project adheres to
   evaluates it as `(.q.dispatch_sync (quote <request>))`. The verbs that
   connect, send, post, list connections or install a hook are registered
   restricted, so a restricted peer gains none of them. `.q.dispatch_sync` is
-  not, so a restricted q peer or Rayforce IPC client can call it, and a q sync
-  hook it reaches runs unrestricted. The runtime releases a
-  hook set before any poll existed when it is dropped. `rayforce-sys` binds
-  `q_env_register` and `q_hooks_release`.
+  not, so a restricted caller on either wire can call it, and a q sync hook it
+  reaches runs unrestricted. The runtime releases a hook set before any poll
+  existed when it is dropped. `rayforce-sys` binds `q_env_register` and
+  `q_hooks_release`.
 
 ## 1.5.0
 

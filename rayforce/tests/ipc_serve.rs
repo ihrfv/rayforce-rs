@@ -426,8 +426,9 @@ fn a_restricted_client_cannot_install_a_q_hook() {
 /// So a restricted client hands the embedder's hook data of its own choosing,
 /// and the hook's insert lands where the client's own insert is refused. This
 /// pins today's behaviour. If the call starts failing with `access`,
-/// rayforce-q has closed the gap: flip these assertions and correct
-/// `Poll::set_restricted` and the IPC guide.
+/// rayforce-q has closed the gap. Flip these assertions and correct
+/// `Poll::set_restricted`, which the IPC guide points at, and the
+/// CHANGELOG's entry while it is unreleased.
 #[test]
 fn a_restricted_client_reaches_a_q_sync_hook_through_dispatch_sync() {
     Runtime::scope(|rt| {

@@ -143,8 +143,9 @@ fn a_restricted_listener_refuses_source_text() {
 /// source text as `(.q.dispatch_sync; "text")` on a frame no hook covers.
 /// With no sync hook the text runs under the restricted rule, so a read
 /// answers and a `set` is refused. This pins today's behaviour. If the read
-/// starts failing with `access`, rayforce-q has closed the gap: flip that
-/// assertion and correct `Poll::set_restricted` and the IPC guide.
+/// starts failing with `access`, rayforce-q has closed the gap. Flip that
+/// assertion and correct `Poll::set_restricted`, which the IPC guide points
+/// at, and the CHANGELOG's entry while it is unreleased.
 #[test]
 fn a_restricted_peer_runs_source_text_through_dispatch_sync() {
     Runtime::scope(|rt| {
