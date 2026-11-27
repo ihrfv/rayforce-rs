@@ -121,6 +121,32 @@ fn an_async_push_reaches_a_rayfall_function() {
     .unwrap();
 }
 
+/// The listener's connections copy the poll's restricted flag when it
+/// accepts them, and a restricted q connection refuses source text whole
+/// (rayforce-q's README, "For an untrusted Q peer").
+#[test]
+fn a_restricted_listener_refuses_source_text() {
+    Runtime::scope(|_rt| {
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let port = free_port();
+        let _listener = poll.serve_q(port)?;
+
+        let peer = connect(port);
+        let sock = pump_until(&poll, || peer.try_recv().ok()).expect("logged in");
+        let reply = send_sync(&sock, char_vec("(+ 1 2)"));
+        let (msgtype, body) = pump_until(&poll, || reply.try_recv().ok()).expect("answered");
+
+        assert_eq!(msgtype, RESPONSE);
+        // A q error: type -128, then its text up to a NUL.
+        assert_eq!(body[0] as i8, -128, "an error, not a value");
+        let text = String::from_utf8_lossy(&body[1..]);
+        assert!(text.starts_with("access"), "refused with access: {text}");
+        Ok(())
+    })
+    .unwrap();
+}
+
 #[test]
 fn port_zero_is_refused() {
     Runtime::scope(|_rt| {

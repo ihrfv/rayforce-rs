@@ -153,6 +153,36 @@ impl Poll {
         Ok(rc)
     }
 
+    /// Make every connection this poll creates from here on evaluate
+    /// restricted, or not.
+    ///
+    /// A restricted request cannot call a builtin the core registers
+    /// `RAY_FN_RESTRICTED`, such as `set`, `del`, `insert`, `.sys.exec` or
+    /// `.ipc.open`, and binds a name only in a frame it opened itself, so it
+    /// cannot rebind a global other code reads or install a connection hook.
+    /// Such a call answers with the error `access`. Reads, queries and
+    /// aggregations are allowed. The core's `storage/ipc.md`, "-U (password +
+    /// restricted mode)", has the whole rule.
+    ///
+    /// The flag is the poll's, one for all its listeners, and a connection
+    /// copies it when it is made: a Rayforce IPC connection the listener
+    /// accepts, a q connection [`Poll::serve_q`] accepts, and a q connection
+    /// attached with [`crate::q::QConnection::attach`]. A connection made
+    /// before the call keeps the mode it was made with. So call this before
+    /// the listener's first accept and before the first attach. On a
+    /// restricted q connection, pushed source text is refused whole
+    /// (rayforce-q's README, "For an untrusted Q peer").
+    ///
+    /// Fails, as [`Poll::run_for`] does, when this handle outlived its
+    /// runtime.
+    pub fn set_restricted(&self, restricted: bool) -> Result<()> {
+        self.check_current()?;
+        // SAFETY: the poll is live, since `check_current` holds on this
+        // thread, and the header asks for the owning thread, which this is.
+        unsafe { sys::ray_poll_set_restricted(self.ptr, restricted) };
+        Ok(())
+    }
+
     /// Stop a blocking [`Poll::run_for`]. A no-op on a retired handle.
     pub fn exit(&self, code: i64) {
         if self.is_current() {

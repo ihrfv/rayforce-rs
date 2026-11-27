@@ -352,7 +352,12 @@ evaluated; and whether it was `Answered`, `Failed` with the core's error code, o
 - The guard works through the core's `.ipc.on.sync` and `.ipc.on.async` hooks,
   which are one per process, so a second `serve_ipc` is refused. They are
   globals a client can redefine: serve clients in restricted mode to hold the
-  budget against them.
+  budget against them, with `poll.set_restricted(true)?` before `start`. A
+  restricted client's `set` or `del` of a hook, and any other builtin the core
+  marks restricted, is refused with `access`. The flag belongs to the poll and
+  each connection copies it when it is made, so it covers the Q listener and
+  an attached q connection made after it too, and leaves one made before it
+  as it was.
 - As with the Q listener, the socket closes only with the runtime. Dropping the
   `IpcServer` stops the guard, not the serving.
 - A zero budget, which would cancel every request, and port 0 are refused.

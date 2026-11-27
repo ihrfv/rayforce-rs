@@ -3,6 +3,20 @@
 All notable changes to `rayforce` are documented here. This project adheres to
 [Semantic Versioning](https://semver.org).
 
+## Unreleased
+
+### Added
+
+- **`Poll::set_restricted` turns on the core's restricted mode from safe
+  code.** It wraps `ray_poll_set_restricted`: every connection the poll makes
+  from then on evaluates without the builtins the core registers
+  `RAY_FN_RESTRICTED`, `set`, `insert` and `.sys.exec` among them, and binds
+  only in frames it opened itself, so a client cannot rebind the hooks
+  `Poll::serve_ipc` guards it with. A connection copies the flag when it is
+  made, so call it before the listener's first accept and before the first
+  attach. On a handle that outlived its runtime it returns an error, as
+  `run_for` does.
+
 ## 1.5.0
 
 ### Added
