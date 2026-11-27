@@ -41,7 +41,7 @@ const CORE_VERSION: &str = "3.0.2";
 /// under OUT_DIR, an unset value does not fall back to "unknown" — it silently
 /// reports the HEAD of whatever unrelated repository happens to enclose the
 /// build directory.
-const CORE_COMMIT: &str = "e6deb32";
+const CORE_COMMIT: &str = "e60a33c";
 
 /// Warning flags for the vendored core build — the core's own `WARNS_BASE`
 /// (`Makefile:44`) minus `-Werror`. Consumers compile this with whatever
