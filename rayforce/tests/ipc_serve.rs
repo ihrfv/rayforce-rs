@@ -10,7 +10,7 @@ mod support;
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
 use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -278,6 +278,140 @@ fn a_second_server_in_one_process_is_refused() {
             poll.serve_ipc(free_port()).start().is_err(),
             "the core's hooks are one per process"
         );
+        Ok(())
+    })
+    .unwrap();
+}
+
+// --- Restricted mode ----------------------------------------------------------
+//
+// The guard's hooks are globals, so a client that could rebind them would
+// escape its budget. `Poll::set_restricted` is what holds them: the core
+// evaluates a restricted connection's request without the builtins registered
+// `RAY_FN_RESTRICTED`, `set` and `del` among them, and lets it bind only in a
+// frame it opened itself (the core's docs/docs/storage/ipc.md, "-U (password +
+// restricted mode)").
+
+/// A table small enough to count, for a request that only reads.
+const SMALL: &str = "(set t (table [a] (list (til 3))))";
+
+#[test]
+fn on_a_restricted_poll_a_read_is_answered_and_a_write_refused() {
+    Runtime::scope(|rt| {
+        rt.eval(SMALL)?;
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
+        let port = ipc.port();
+        let (read, write) = with_client(&poll, move || {
+            (ipc::ask(port, "(count t)"), ipc::ask(port, "(set x 1)"))
+        });
+        assert_eq!(read, Reply::Long(3));
+        assert_eq!(write, Reply::Error("access".into()));
+        assert!(rt.eval("x").is_err(), "the refused set bound nothing");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_restricted_client_cannot_replace_the_guards_hooks() {
+    Runtime::scope(|_rt| {
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
+        let port = ipc.port();
+        let replies = with_client(&poll, move || {
+            let mut sock = ipc::connect(port);
+            ["(set .ipc.on.sync 0)", "(del .ipc.on.sync)", "(+ 1 2)"].map(|text| {
+                ipc::send(&mut sock, text);
+                ipc::reply(&mut sock)
+            })
+        });
+        assert_eq!(
+            replies,
+            [
+                Reply::Error("access".into()),
+                Reply::Error("access".into()),
+                Reply::Long(3)
+            ]
+        );
+        // Each of the three reached the guard, the last one after both
+        // attempts on its hook, so the hook still hands requests to it.
+        assert_eq!(
+            ended(&ipc.drain()),
+            [
+                Ended::Failed(ErrorCode::Other),
+                Ended::Failed(ErrorCode::Other),
+                Ended::Answered
+            ]
+        );
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn a_request_past_its_budget_is_cancelled_on_a_restricted_poll() {
+    Runtime::scope(|rt| {
+        rt.eval(TABLE)?;
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        let hand = Hand::new();
+        let ipc = poll
+            .serve_ipc(free_port())
+            .budget(BUDGET)
+            .clock(hand.clone())
+            .start()?;
+        let port = ipc.port();
+        let reply = with_client(&poll, move || {
+            let mut sock = ipc::connect(port);
+            ipc::send(&mut sock, &slow());
+            thread::sleep(SETTLE);
+            hand.advance(BUDGET);
+            ipc::reply(&mut sock)
+        });
+        assert_eq!(reply, Reply::Error("cancel".into()));
+        assert_eq!(ended(&ipc.drain()), [Ended::Cancelled(By::Budget)]);
+        Ok(())
+    })
+    .unwrap();
+}
+
+/// The core copies the poll's flag into a connection when it accepts it
+/// (`src/core/ipc.c`, `cd->restricted = poll->restricted`), so restricting
+/// the poll later leaves a connection already made as it was.
+#[test]
+fn a_connection_accepted_before_restricting_keeps_its_mode() {
+    Runtime::scope(|rt| {
+        let poll = Poll::install()?;
+        let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;
+        let port = ipc.port();
+        let (connected_tx, connected) = mpsc::channel();
+        let (restricted_tx, restricted) = mpsc::channel();
+        let client = thread::spawn(move || {
+            // The server answers the handshake after it accepted.
+            let mut early = ipc::connect(port);
+            connected_tx.send(()).unwrap();
+            restricted.recv().unwrap();
+            ipc::send(&mut early, "(set x 1)");
+            let early = ipc::reply(&mut early);
+            (early, ipc::ask(port, "(set y 1)"))
+        });
+        // Empty while the client connects; disconnected if it panicked, which
+        // the join below reports.
+        while matches!(connected.try_recv(), Err(mpsc::TryRecvError::Empty)) {
+            poll.run_for(20)?;
+        }
+        poll.set_restricted(true)?;
+        restricted_tx.send(()).unwrap();
+        while !client.is_finished() {
+            poll.run_for(20)?;
+        }
+        let (early, late) = client.join().unwrap();
+        assert_eq!(early, Reply::Long(1), "accepted before, so unrestricted");
+        assert_eq!(late, Reply::Error("access".into()), "accepted after");
+        assert_eq!(rt.eval("x")?.as_i64()?, 1);
         Ok(())
     })
     .unwrap();

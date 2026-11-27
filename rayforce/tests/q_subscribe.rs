@@ -14,7 +14,9 @@ use std::thread;
 use std::time::Duration;
 
 use rayforce::{env, q::QConnection, Poll, Runtime, Value};
-use support::wire::{dict, drain_one, frame, list, long_vec, sym_atom, sym_vec, ASYNC, RESPONSE};
+use support::wire::{
+    char_vec, dict, drain_one, frame, list, long_vec, sym_atom, sym_vec, ASYNC, RESPONSE,
+};
 
 /// A publisher: handshake, answer one sync request, then push `pushes`.
 ///
@@ -164,6 +166,7 @@ fn a_poll_smuggled_out_of_its_scope_is_inert() {
         let poll = e.as_ref().expect("stashed while the scope was open");
         assert!(!poll.is_current());
         assert!(poll.run_for(1).is_err());
+        assert!(poll.set_restricted(true).is_err());
         poll.exit(0); // must not touch the freed loop
     });
 }
@@ -366,4 +369,36 @@ fn attaching_leaves_the_next_scope_startable() {
     .unwrap();
 
     Runtime::scope(|rt| rt.eval("1")?.as_i64()).unwrap();
+}
+
+/// A q connection copies the poll's restricted flag when it is attached
+/// (rayforce-q's README, "For an untrusted Q peer, call
+/// `ray_poll_set_restricted(poll, true)` before `q_serve` or `q_conn_attach`").
+/// Pushed source text is then refused whole, and a pushed call still reaches
+/// a handler the embedder bound.
+#[test]
+fn a_restricted_subscription_refuses_pushed_source_and_takes_calls() {
+    Runtime::scope(|rt| {
+        UPD_CALLS.store(0, Ordering::SeqCst);
+
+        let source = char_vec("(set leaked 1)");
+        let call = list(&[sym_atom("upd"), long_vec(&[1])]);
+        let port = spawn_publisher(long_vec(&[]), vec![source, call], None);
+
+        let poll = Poll::install()?;
+        poll.set_restricted(true)?;
+        env::bind_vary::<OnUpd>("upd")?;
+        let sub = QConnection::connect("127.0.0.1", port)?.attach(&poll)?;
+        sub.execute(".u.sub[`trade;`]")?;
+
+        // Frames on one connection are dispatched in order, so once the call
+        // has landed, the source pushed before it has been dealt with.
+        assert!(
+            pump_until(&poll, || UPD_CALLS.load(Ordering::SeqCst) >= 1),
+            "the pushed call should reach its handler"
+        );
+        assert!(rt.eval("leaked").is_err(), "the pushed source ran");
+        Ok(())
+    })
+    .unwrap();
 }
