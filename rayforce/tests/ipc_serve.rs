@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 use rayforce::{By, Clock, Ended, ErrorCode, Poll, Runtime};
 use support::ipc::{self, Reply};
 use support::wire::{char_vec, frame, long_atom, read_frame, RESPONSE, SYNC};
-use support::{RECORDING_HOOK, SEEN};
+use support::{install_recording_sync_hook, CREATE_SEEN};
 
 const BUDGET: Duration = Duration::from_secs(10);
 
@@ -431,10 +431,8 @@ fn a_restricted_client_cannot_install_a_q_hook() {
 #[test]
 fn a_restricted_client_reaches_a_q_sync_hook_through_dispatch_sync() {
     Runtime::scope(|rt| {
-        rt.eval(SEEN)?;
-        rt.eval(&format!(
-            "(.q.on 'sync (fn [r] (do ({RECORDING_HOOK} r) 42)))"
-        ))?;
+        rt.eval(CREATE_SEEN)?;
+        install_recording_sync_hook(rt)?;
         let poll = Poll::install()?;
         poll.set_restricted(true)?;
         let ipc = poll.serve_ipc(free_port()).budget(BUDGET).start()?;

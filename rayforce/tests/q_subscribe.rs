@@ -19,7 +19,7 @@ use support::wire::{
     char_vec, dict, drain_one, frame, list, long_atom, long_vec, read_frame, sym_atom, sym_vec,
     ASYNC, RESPONSE, SYNC,
 };
-use support::{RECORDING_HOOK, SEEN};
+use support::{install_recording_sync_hook, pump_until, CREATE_SEEN, RECORDING_HOOK};
 
 /// A publisher: handshake, answer one sync request, then push `pushes`.
 ///
@@ -106,19 +106,8 @@ impl env::UnaryFn for OnEod {
 }
 
 /// Pump the loop until `f` holds or the budget runs out.
-fn pump_until(poll: &Poll, mut f: impl FnMut() -> bool) -> bool {
-    pump_until_some(poll, || f().then_some(())).is_some()
-}
-
-/// Pump the loop until `f` yields or the budget runs out.
-fn pump_until_some<T>(poll: &Poll, mut f: impl FnMut() -> Option<T>) -> Option<T> {
-    for _ in 0..100 {
-        if let Some(v) = f() {
-            return Some(v);
-        }
-        poll.run_for(20).unwrap();
-    }
-    f()
+fn pump_until_holds(poll: &Poll, mut f: impl FnMut() -> bool) -> bool {
+    pump_until(poll, || f().then_some(())).is_some()
 }
 
 // --- Tests ----------------------------------------------------------------
@@ -242,7 +231,7 @@ fn subscription_receives_pushed_frames() {
         // Pushes may already have been dispatched from inside `execute`, which
         // pumps the connection while it waits rather than swallowing frames.
         assert!(
-            pump_until(&poll, || UPD_CALLS.load(Ordering::SeqCst) >= 3),
+            pump_until_holds(&poll, || UPD_CALLS.load(Ordering::SeqCst) >= 3),
             "expected 3 pushed batches, saw {}",
             UPD_CALLS.load(Ordering::SeqCst)
         );
@@ -279,7 +268,7 @@ fn subscription_notices_the_peer_going_away() {
         // The publisher closes after its last push. A disconnect is not an error
         // and does not interrupt the loop — the selector just stops resolving.
         assert!(
-            pump_until(&poll, || !sub.is_alive()),
+            pump_until_holds(&poll, || !sub.is_alive()),
             "subscription still reports alive after the peer closed"
         );
         // Sending on a dead subscription errors rather than hanging.
@@ -310,7 +299,7 @@ fn a_stale_subscription_does_not_close_its_successor() {
 
         // Let the peer go away and the rx machine deregister its selector.
         assert!(
-            pump_until(&poll, || !first.is_alive()),
+            pump_until_holds(&poll, || !first.is_alive()),
             "publisher 1 should have gone away"
         );
 
@@ -408,7 +397,7 @@ fn a_restricted_subscription_refuses_pushed_source_and_takes_calls() {
         // Frames on one connection are dispatched in order, so once the call
         // has landed, the source pushed before it has been dealt with.
         assert!(
-            pump_until(&poll, || UPD_CALLS.load(Ordering::SeqCst) >= 1),
+            pump_until_holds(&poll, || UPD_CALLS.load(Ordering::SeqCst) >= 1),
             "the pushed call should reach its handler"
         );
         assert!(rt.eval("leaked").is_err(), "the pushed source ran");
@@ -447,7 +436,7 @@ fn spawn_sync_publisher(request: Vec<u8>) -> (u16, Receiver<(u8, Vec<u8>)>) {
 #[test]
 fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
     Runtime::scope(|rt| {
-        rt.eval(SEEN)?;
+        rt.eval(CREATE_SEEN)?;
         rt.eval(&format!("(.q.on 'async {RECORDING_HOOK})"))?;
 
         // Nothing binds `upd`, so evaluating the push would fail with `name`.
@@ -459,7 +448,7 @@ fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
         sub.execute(".u.sub[`trade;`]")?;
 
         assert!(
-            pump_until(&poll, || rt
+            pump_until_holds(&poll, || rt
                 .eval("(count seen)")
                 .is_ok_and(|n| n.as_i64().is_ok_and(|n| n == 2))),
             "the hook should have inserted the push"
@@ -477,10 +466,8 @@ fn an_async_hook_takes_a_pushed_call_as_data_on_a_restricted_poll() {
 #[test]
 fn a_sync_frame_reaches_the_sync_hook_on_a_restricted_poll() {
     Runtime::scope(|rt| {
-        rt.eval(SEEN)?;
-        rt.eval(&format!(
-            "(.q.on 'sync (fn [r] (do ({RECORDING_HOOK} r) 42)))"
-        ))?;
+        rt.eval(CREATE_SEEN)?;
+        install_recording_sync_hook(rt)?;
 
         let request = list(&[sym_atom("eod"), long_vec(&[7])]);
         let (port, reply) = spawn_sync_publisher(request);
@@ -489,7 +476,7 @@ fn a_sync_frame_reaches_the_sync_hook_on_a_restricted_poll() {
         let sub = QConnection::connect("127.0.0.1", port)?.attach(&poll)?;
         sub.execute(".u.sub[`trade;`]")?;
 
-        let answered = pump_until_some(&poll, || reply.try_recv().ok());
+        let answered = pump_until(&poll, || reply.try_recv().ok());
         assert_eq!(
             answered.expect("the sync frame should be answered"),
             (RESPONSE, long_atom(42)),
